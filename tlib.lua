@@ -2,7 +2,8 @@
 local tlib = {}
 
 local programs = {
-    "test.lua"
+    "test",
+    "digital_mining",
 }
 
 -- Directional math vectors:
