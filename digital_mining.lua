@@ -79,7 +79,7 @@ local function setupEntangloporter(periph)
         error("setupEntangloporter: Peripheral missing setEjecting()")
     end
 
-    periph.setMode("ENERGY", "FRONT", "OUTPUT")
+    periph.setMode("ENERGY", "LEFT", "OUTPUT")
     periph.setMode("ITEM", "TOP", "INPUT")
     periph.setEjecting("ENERGY", true)
 
