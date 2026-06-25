@@ -217,7 +217,7 @@ local function run()
         while p.transporterStep < 5 do
             mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
 
-            if p.transporterStep == 2 then
+            if p.transporterStep == 3 then
                 tlib.turnLeft()
             end
 
