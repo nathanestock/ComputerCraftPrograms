@@ -12,7 +12,16 @@ end
 local ccRead = rawget(_G, "read")
 local ccShell = rawget(_G, "shell")
 local ccTerm = rawget(_G, "term")
+local ccWrite = rawget(_G, "write") or function(msg)
+    if ccTerm and ccTerm.write then
+        ccTerm.write(tostring(msg))
+    else
+        print(tostring(msg))
+    end
+end
 local ccColors = rawget(_G, "colors")
+local ccKeys = rawget(_G, "keys")
+local osPullEvent = os and rawget(os, "pullEvent")
 local rebootFn = os and os["reboot"]
 
 local statusColors = ccColors and {
@@ -160,11 +169,11 @@ local function promptTestOptions()
     print("=== tlib Self-Test Configuration ===")
     resetColor()
 
-    write("Enable destructive movement tests? (y/N): ")
+    ccWrite("Enable destructive movement tests? (y/N): ")
     local d = ccRead()
     test.allowDestructive = (d == "y" or d == "Y")
 
-    write("Enable integration tests (GPS/Rednet)? (y/N): ")
+    ccWrite("Enable integration tests (GPS/Rednet)? (y/N): ")
     local i = ccRead()
     test.allowIntegration = (i == "y" or i == "Y")
 
@@ -362,6 +371,108 @@ local function runOptionalIntegrationTests()
     end
 end
 
+local function collectDetailedResults()
+    local detailEntries = {}
+
+    for _, entry in ipairs(test.assertions) do
+        local status = entry and entry.status
+        if status == "FAIL" or status == "SKIP" or status == "WARN" then
+            table.insert(detailEntries, entry)
+        end
+    end
+
+    return detailEntries
+end
+
+local function printDetailedResultsFallback(detailEntries)
+    print("")
+    print("Detailed results (FAIL/SKIP/WARN):")
+
+    for i, entry in ipairs(detailEntries) do
+        local status = tostring(entry.status or "?")
+        local id = tostring(entry.id or ("entry-" .. tostring(i)))
+        local message = tostring(entry.message or "")
+
+        setColor(statusColors and statusColors[status])
+        print(string.format("[%s] %s - %s", status, id, message))
+        resetColor()
+    end
+end
+
+local function printDetailedResultsInteractive(detailEntries)
+    if not (ccTerm and ccTerm.clear and ccTerm.setCursorPos and ccTerm.getSize) then
+        printDetailedResultsFallback(detailEntries)
+        return
+    end
+
+    if type(osPullEvent) ~= "function" or type(ccKeys) ~= "table" then
+        printDetailedResultsFallback(detailEntries)
+        return
+    end
+
+    local offset = 1
+
+    while true do
+        local width, height = ccTerm.getSize()
+        width = width or 51
+        height = height or 19
+
+        local listTop = 4
+        local footerRows = 1
+        local visibleRows = math.max(1, height - listTop - footerRows)
+        local maxOffset = math.max(1, #detailEntries - visibleRows + 1)
+        if offset > maxOffset then
+            offset = maxOffset
+        end
+
+        ccTerm.clear()
+        ccTerm.setCursorPos(1, 1)
+        setColor(ccColors and ccColors.lightBlue)
+        print("=== Detailed Results (FAIL/SKIP/WARN) ===")
+        resetColor()
+        print(string.format("Showing %d-%d of %d", offset, math.min(offset + visibleRows - 1, #detailEntries), #detailEntries))
+        print("Use Up/Down to scroll, Q to close")
+
+        local row = listTop
+        for i = offset, math.min(#detailEntries, offset + visibleRows - 1) do
+            local entry = detailEntries[i] or {}
+            local status = tostring(entry.status or "?")
+            local id = tostring(entry.id or ("entry-" .. tostring(i)))
+            local message = tostring(entry.message or "")
+
+            ccTerm.setCursorPos(1, row)
+            setColor(statusColors and statusColors[status])
+            ccWrite("[" .. status .. "] ")
+            resetColor()
+
+            local prefixWidth = #status + 3
+            local content = id .. " - " .. message
+            local maxContentWidth = math.max(1, width - prefixWidth)
+            if #content > maxContentWidth then
+                if maxContentWidth > 3 then
+                    content = content:sub(1, maxContentWidth - 3) .. "..."
+                else
+                    content = content:sub(1, maxContentWidth)
+                end
+            end
+            ccWrite(content)
+
+            row = row + 1
+        end
+
+        local event, key = osPullEvent("key")
+        if event == "key" then
+            if key == ccKeys.up then
+                offset = math.max(1, offset - 1)
+            elseif key == ccKeys.down then
+                offset = math.min(maxOffset, offset + 1)
+            elseif key == ccKeys.q or key == ccKeys.enter or key == ccKeys.backspace then
+                break
+            end
+        end
+    end
+end
+
 local function printSummary()
     print("")
     if ccTerm and ccTerm.setTextColor and ccColors then
@@ -378,11 +489,13 @@ local function printSummary()
     setColor(statusColors and statusColors.WARN)
     print("WARN: " .. tostring(test.counts.WARN))
     resetColor()
-    print("Assertions logged: " .. tostring(#test.assertions))
-    print("Phase: " .. tostring(test.phase))
-    print("Completed: " .. tostring(test.completed))
-    print("")
-    print("Note: Summary-only failure policy is enabled.")
+
+    local detailEntries = collectDetailedResults()
+    if #detailEntries > 0 then
+        print("")
+        print("Detailed results: " .. tostring(#detailEntries))
+        printDetailedResultsInteractive(detailEntries)
+    end
 end
 
 local function finalizeHarness()
