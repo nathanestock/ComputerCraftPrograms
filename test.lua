@@ -53,6 +53,11 @@ local function ensureHarnessState(taskState)
     h.counts.WARN = h.counts.WARN or 0
     h.allowDestructive = h.allowDestructive or false
     h.allowIntegration = h.allowIntegration or false
+
+    if h.phase == "boot" and h.rebootRequested and not h.rebootVerified and h.rebootToken then
+        h.phase = "post_reboot_verify"
+    end
+
     h.updatedAt = nowStamp()
     return taskState, h
 end
@@ -402,11 +407,22 @@ local function runHarness()
     end
 
     if test.phase == "boot" then
-        print("Initializing tlib self-test harness...")
-        setPhase("safe_tests")
+        if test.rebootRequested and not test.rebootVerified and test.rebootToken then
+            markWarn("RB-BOOT-RECOVER", "Recovered pending reboot checkpoint from boot phase")
+            setPhase("post_reboot_verify")
+        else
+            print("Initializing tlib self-test harness...")
+            setPhase("safe_tests")
+        end
     end
 
     if test.phase == "safe_tests" then
+        if test.rebootRequested and not test.rebootVerified and test.rebootToken then
+            markWarn("RB-LOOP-GUARD", "Pending reboot checkpoint detected; skipping duplicate safe_tests")
+            setPhase("post_reboot_verify")
+            return
+        end
+
         runSafeTests()
         local resumeProgram = test.resumeProgram or getResumeProgram()
         test.resumeProgram = resumeProgram
