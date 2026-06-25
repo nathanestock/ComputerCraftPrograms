@@ -62,6 +62,7 @@ local function ensureHarnessState(taskState)
     return taskState, h
 end
 
+tlib.load()
 local task = tlib.getTaskState()
 task, test = ensureHarnessState(task)
 
