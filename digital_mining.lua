@@ -123,17 +123,17 @@ local function setupMiner(periph)
         periph.removeFilter(filter)
     end
 
-    local diamondFilter = {
+    local filter = {
         ["type"] = "MINER_TAG_FILTER",
-        ["tag"] = "*:ores/diamond"
+        ["tag"] = "*:ores"
     }
 
-    local success, err = periph.addFilter(diamondFilter)
+    local success, err = periph.addFilter(filter)
     if not success then
         error("setupMiner: Failed to add filter: " .. tostring(err))
     end
 
-    print("Digital miner configured: autoEject=true, silkTouch=true, y=[-64,319], radius=32, filter=*ores/diamond")
+    print("Digital miner configured: autoEject=true, silkTouch=true, y=[-64,319], radius=32, filter=*ores")
 end
 
 -- =============================================================================
