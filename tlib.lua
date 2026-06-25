@@ -267,6 +267,15 @@ function tlib.clearProgram()
     tlib.save()
 end
 
+-- Marks a program as fully complete. Clears task state and program registration
+-- while preserving turtle navigation state (position, facing, inventory, hardware).
+function tlib.completeProgram()
+    state.resumeCommand = nil
+    state.currentProgram = nil
+    state.taskState = {}
+    tlib.save()
+end
+
 -- =============================================================================
 -- Self-Healing Inventory & Selection Engine
 -- =============================================================================

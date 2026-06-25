@@ -388,11 +388,9 @@ end
 local function finalizeHarness()
     test.completed = true
     test.phase = "done"
-
-    -- Clear resume target but preserve task state artifacts.
-    tlib.registerProgram(nil)
     saveTask()
     printSummary()
+    tlib.completeProgram()
 end
 
 local function persistFatalError(err)
