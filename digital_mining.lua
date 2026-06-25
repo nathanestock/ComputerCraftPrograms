@@ -18,8 +18,8 @@ local task = tlib.getTaskState() or {}
 task.digitalMining = task.digitalMining or {
     version         = 1,
     phase           = "boot",
-    transporterStep = 0,     -- 0–4: how many placement steps completed (1–3=back, 4=down)
-    teardownStep    = 0,     -- 0=up nav, 1–3=dig+forward per transporter
+    transporterStep = 0,     -- 0–5: how many transporter placements completed
+    teardownStep    = 0,     -- step tracker for transporter teardown sequence
     monitorChecks   = 0,
     homePos         = nil,   -- {x, y, z, facing} at boot
     rebootToken     = nil,
@@ -162,8 +162,8 @@ local function run()
         if minerCount < 1 then
             error("Boot: Missing Digital Miner (found " .. minerCount .. ")")
         end
-        if transporterCount < 4 then
-            error("Boot: Need 4 Ultimate Logistical Transporters (found " .. transporterCount .. ")")
+        if transporterCount < 5 then
+            error("Boot: Need 5 Ultimate Logistical Transporters (found " .. transporterCount .. ")")
         end
         if entangloporterCount < 1 then
             error("Boot: Missing Quantum Entangloporter (found " .. entangloporterCount .. ")")
@@ -196,33 +196,29 @@ local function run()
     end
 
     -- -------------------------------------------------------------------------
-    -- nav_to_pipe_start: back×2, up×3, forward×2, turnRight
-    -- From start (0,0,0) → (0,3,0) facing East
+    -- nav_to_pipe_start: forward×2, up×2, turnRight
     -- -------------------------------------------------------------------------
     if p.phase == "nav_to_pipe_start" then
-        mv(tlib.back, "nav_to_pipe_start: back(1)")
-        mv(tlib.back, "nav_to_pipe_start: back(2)")
-        mv(tlib.up, "nav_to_pipe_start: up(1)")
-        mv(tlib.up, "nav_to_pipe_start: up(2)")
-        mv(tlib.up, "nav_to_pipe_start: up(3)")
         mv(tlib.forward, "nav_to_pipe_start: forward(1)")
         mv(tlib.forward, "nav_to_pipe_start: forward(2)")
+        mv(tlib.up, "nav_to_pipe_start: up(1)")
+        mv(tlib.up, "nav_to_pipe_start: up(2)")
         tlib.turnRight()
 
         setPhase("place_transporters")
     end
 
     -- -------------------------------------------------------------------------
-    -- place_transporters: steps 1–3 = back+place; step 4 = down+place
-    -- transporterStep tracks completed steps (0 = none, 4 = all done)
-    -- T1→(0,3,0), T2→(-1,3,0), T3→(-2,3,0) via back; T4→(-2,2,0) via down
+    -- place_transporters sequence:
+    -- back+place, back+place, turnLeft, back+place, back+place, back+place
+    -- transporterStep tracks completed placements (0 = none, 5 = all done)
     -- -------------------------------------------------------------------------
     if p.phase == "place_transporters" then
-        while p.transporterStep < 4 do
-            if p.transporterStep < 3 then
-                mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
-            else
-                mv(tlib.down, "place_transporters: down (step 4)")
+        while p.transporterStep < 5 do
+            mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
+
+            if p.transporterStep == 2 then
+                tlib.turnLeft()
             end
 
             local selOk, selErr = tlib.selectItem("ultimate_logistical_transporter")
@@ -238,7 +234,7 @@ local function run()
 
             p.transporterStep = p.transporterStep + 1
             saveTask()
-            print(string.format("Transporter %d/4 placed.", p.transporterStep))
+            print(string.format("Transporter %d/5 placed.", p.transporterStep))
         end
 
         setPhase("nav_to_entangloporter")
@@ -246,7 +242,6 @@ local function run()
 
     -- -------------------------------------------------------------------------
     -- nav_to_entangloporter: down 1
-    -- Turtle: (-3,2,0) → (-3,1,0) facing East
     -- -------------------------------------------------------------------------
     if p.phase == "nav_to_entangloporter" then
         mv(tlib.down, "nav_to_entangloporter: down(1)")
@@ -255,7 +250,6 @@ local function run()
 
     -- -------------------------------------------------------------------------
     -- place_entangloporter: place quantum entangloporter in front
-    -- Turtle at (-3,1,0) facing East → places at (-2,1,0), adjacent below T4 at (-2,2,0) ✓
     -- -------------------------------------------------------------------------
     if p.phase == "place_entangloporter" then
         local selOk, selErr = tlib.selectItem("quantum_entangloporter")
@@ -288,28 +282,15 @@ local function run()
     end
 
     -- -------------------------------------------------------------------------
-    -- nav_to_miner: move around entangloporter and return under miner
-    -- (-3,1,0) facing East
-    --   → turnRight → facing South
-    --   → forward×2 → (-3,1,2)
-    --   → turnLeft  → facing East
-    --   → forward×3 → (0,1,2)
-    --   → turnLeft  → facing North
-    --   → down      → (0,0,2)
-    --   → forward×2 → (0,0,0) facing North (miner above at (0,1,0)) ✓
+    -- nav_to_miner: down 1, forward 1, turnRight, forward 2, turnLeft
     -- -------------------------------------------------------------------------
     if p.phase == "nav_to_miner" then
-        tlib.turnRight()
-        mv(tlib.forward, "nav_to_miner: forward(1)")
-        mv(tlib.forward, "nav_to_miner: forward(2)")
-        tlib.turnLeft()
-        mv(tlib.forward, "nav_to_miner: forward(3)")
-        mv(tlib.forward, "nav_to_miner: forward(4)")
-        mv(tlib.forward, "nav_to_miner: forward(5)")
-        tlib.turnLeft()
         mv(tlib.down, "nav_to_miner: down(1)")
-        mv(tlib.forward, "nav_to_miner: forward(6)")
-        mv(tlib.forward, "nav_to_miner: forward(7)")
+        mv(tlib.forward, "nav_to_miner: forward(1)")
+        tlib.turnRight()
+        mv(tlib.forward, "nav_to_miner: forward(2)")
+        mv(tlib.forward, "nav_to_miner: forward(3)")
+        tlib.turnLeft()
 
         setPhase("setup_miner")
     end
@@ -377,39 +358,23 @@ local function run()
     end
 
     -- -------------------------------------------------------------------------
-    -- nav_to_entangloporter_teardown: reverse of nav_to_miner
-    -- (0,0,0) facing North
-    --   → back×2    → (0,0,2)
-    --   → up        → (0,1,2)
-    --   → turnRight → facing East
-    --   → back×3    → (-3,1,2)
-    --   → turnRight → facing South
-    --   → back×2    → (-3,1,0)
-    --   → turnLeft  → facing East (entangloporter at (-2,1,0) in front) ✓
+    -- nav_to_entangloporter_teardown: turnLeft, forward×2
     -- -------------------------------------------------------------------------
     if p.phase == "nav_to_entangloporter_teardown" then
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(1)")
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(2)")
-        mv(tlib.up, "nav_to_entangloporter_teardown: up(1)")
-        tlib.turnRight()
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(3)")
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(4)")
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(5)")
-        tlib.turnRight()
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(6)")
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(7)")
         tlib.turnLeft()
+        mv(tlib.forward, "nav_to_entangloporter_teardown: forward(1)")
+        mv(tlib.forward, "nav_to_entangloporter_teardown: forward(2)")
 
         setPhase("teardown_entangloporter")
     end
 
     -- -------------------------------------------------------------------------
-    -- teardown_entangloporter: dig quantum entangloporter (in front)
+    -- teardown_entangloporter: digUp to break quantum entangloporter
     -- -------------------------------------------------------------------------
     if p.phase == "teardown_entangloporter" then
-        local dug = tlib.dig()
+        local dug = tlib.digUp()
         if not dug then
-            error("teardown_entangloporter: Failed to dig quantum entangloporter")
+            error("teardown_entangloporter: Failed to dig quantum entangloporter above")
         end
 
         tlib.scanInventory()
@@ -418,81 +383,97 @@ local function run()
     end
 
     -- -------------------------------------------------------------------------
-    -- teardown_transporters: up×2 to dig T4+T3, then forward+dig×2 for T2+T1, forward
-    -- teardownStep 0: up → (-3,2,0), dig T4 at (-2,2,0)
-    -- teardownStep 1: up → (-3,3,0), dig T3 at (-2,3,0)
-    -- teardownStep 2: forward → (-2,3,0), dig T2 at (-1,3,0)
-    -- teardownStep 3: forward → (-1,3,0), dig T1 at (0,3,0)
-    -- teardownStep 4: forward → (0,3,0)  ← ready for return_home
+    -- teardown_transporters sequence:
+    -- up+digUp, up+turnRight+dig, forward+dig, forward+turnRight+dig,
+    -- forward+dig, forward+turnLeft, down×2, back×2
     -- -------------------------------------------------------------------------
     if p.phase == "teardown_transporters" then
-        -- Step 0: up to T4 level, dig T4
         if p.teardownStep == 0 then
-            mv(tlib.up, "teardown_transporters: up to T4")
-            local dug = tlib.dig()
+            mv(tlib.up, "teardown_transporters: up(1)")
+            local dug = tlib.digUp()
             if not dug then
-                error("teardown_transporters: Failed to dig T4")
+                error("teardown_transporters: Failed to dig transporter (digUp step 1)")
             end
             tlib.scanInventory()
-            print("Transporter 4/4 picked up.")
+            print("Transporter 1/5 picked up.")
             p.teardownStep = 1
             saveTask()
         end
 
-        -- Step 1: up to T3 level, dig T3
         if p.teardownStep == 1 then
-            mv(tlib.up, "teardown_transporters: up to T3")
+            mv(tlib.up, "teardown_transporters: up(2)")
+            tlib.turnRight()
             local dug = tlib.dig()
             if not dug then
-                error("teardown_transporters: Failed to dig T3")
+                error("teardown_transporters: Failed to dig transporter (dig step 2)")
             end
             tlib.scanInventory()
-            print("Transporter 3/4 picked up.")
+            print("Transporter 2/5 picked up.")
             p.teardownStep = 2
             saveTask()
         end
 
-        -- Steps 2–3: forward then dig (T2, T1); step 4: forward to (0,3,0)
-        while p.teardownStep <= 4 do
-            mv(tlib.forward,
-                string.format("teardown_transporters: forward (step %d)", p.teardownStep))
-
-            if p.teardownStep <= 3 then
-                local dug = tlib.dig()
-                if not dug then
-                    error(string.format("teardown_transporters: Failed to dig transporter (step %d)",
-                        p.teardownStep))
-                end
-                tlib.scanInventory()
-                print(string.format("Transporter %d/4 picked up.", 4 - p.teardownStep))
+        if p.teardownStep == 2 then
+            mv(tlib.forward, "teardown_transporters: forward(1)")
+            local dug = tlib.dig()
+            if not dug then
+                error("teardown_transporters: Failed to dig transporter (dig step 3)")
             end
-
-            p.teardownStep = p.teardownStep + 1
+            tlib.scanInventory()
+            print("Transporter 3/5 picked up.")
+            p.teardownStep = 3
             saveTask()
         end
 
-        setPhase("return_home")
-    end
+        if p.teardownStep == 3 then
+            mv(tlib.forward, "teardown_transporters: forward(2)")
+            tlib.turnRight()
+            local dug = tlib.dig()
+            if not dug then
+                error("teardown_transporters: Failed to dig transporter (dig step 4)")
+            end
+            tlib.scanInventory()
+            print("Transporter 4/5 picked up.")
+            p.teardownStep = 4
+            saveTask()
+        end
 
-    -- -------------------------------------------------------------------------
-    -- return_home: turnLeft, back×2, down×3, forward×2
-    -- (0,3,0) facing East
-    --   → turnLeft  → facing North
-    --   → back×2    → (0,3,2)   [backing south from north]
-    --   → down×3    → (0,0,2)
-    --   → forward×2 → (0,0,0)  facing North ✓
-    -- -------------------------------------------------------------------------
-    if p.phase == "return_home" then
-        tlib.turnLeft()
-        mv(tlib.back, "return_home: back(1)")
-        mv(tlib.back, "return_home: back(2)")
-        mv(tlib.down, "return_home: down(1)")
-        mv(tlib.down, "return_home: down(2)")
-        mv(tlib.down, "return_home: down(3)")
-        mv(tlib.forward, "return_home: forward(1)")
-        mv(tlib.forward, "return_home: forward(2)")
+        if p.teardownStep == 4 then
+            mv(tlib.forward, "teardown_transporters: forward(3)")
+            local dug = tlib.dig()
+            if not dug then
+                error("teardown_transporters: Failed to dig transporter (dig step 5)")
+            end
+            tlib.scanInventory()
+            print("Transporter 5/5 picked up.")
+            p.teardownStep = 5
+            saveTask()
+        end
 
-        setPhase("finalize")
+        if p.teardownStep == 5 then
+            mv(tlib.forward, "teardown_transporters: forward(4)")
+            tlib.turnLeft()
+            p.teardownStep = 6
+            saveTask()
+        end
+
+        if p.teardownStep == 6 then
+            mv(tlib.down, "teardown_transporters: down(1)")
+            mv(tlib.down, "teardown_transporters: down(2)")
+            p.teardownStep = 7
+            saveTask()
+        end
+
+        if p.teardownStep == 7 then
+            mv(tlib.back, "teardown_transporters: back(1)")
+            mv(tlib.back, "teardown_transporters: back(2)")
+            p.teardownStep = 8
+            saveTask()
+        end
+
+        if p.teardownStep >= 8 then
+            setPhase("finalize")
+        end
     end
 
     -- -------------------------------------------------------------------------
