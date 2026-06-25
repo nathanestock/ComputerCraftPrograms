@@ -118,7 +118,7 @@ local function getResumeProgram()
     if type(runningProgram) == "string" and runningProgram ~= "" then
         return runningProgram
     end
-    return "test.lua"
+    return "test"
 end
 
 local function runSafeTests()

@@ -67,6 +67,46 @@ local function resolveProgramPath(programName)
     return programName
 end
 
+local function buildLaunchCandidates(programName)
+    if type(programName) ~= "string" or programName == "" then
+        return {}
+    end
+
+    local seen = {}
+    local list = {}
+
+    local function add(value)
+        if type(value) == "string" and value ~= "" and not seen[value] then
+            seen[value] = true
+            table.insert(list, value)
+        end
+    end
+
+    add(programName)
+
+    if programName:match("%.lua$") then
+        add(programName:sub(1, -5))
+    else
+        add(programName .. ".lua")
+    end
+
+    local resolved = resolveProgramPath(programName)
+    add(resolved)
+
+    return list
+end
+
+local function runProgramFlexible(programName)
+    local candidates = buildLaunchCandidates(programName)
+    for _, candidate in ipairs(candidates) do
+        if shell.run(candidate) then
+            return true, candidate
+        end
+    end
+
+    return false, nil
+end
+
 
 
 function tlib.isGpsAvailable() return state.gpsAvailable end
@@ -110,8 +150,11 @@ function tlib.startup()
         print("\nRecovering state: Resuming " .. launchTarget)
         -- We don't use tlib.execute here because we are restarting the program loop,
         -- not running a single block of logic.
-        local ok = shell.run(launchTarget)
+        local ok, launchedAs = runProgramFlexible(launchTarget)
         if ok then
+            if launchedAs ~= launchTarget then
+                print("Resume target adjusted to: " .. launchedAs)
+            end
             return
         end
 
