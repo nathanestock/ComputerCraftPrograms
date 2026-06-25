@@ -217,10 +217,6 @@ local function run()
         while p.transporterStep < 5 do
             mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
 
-            if p.transporterStep == 2 then
-                tlib.turnLeft()
-                mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
-            end
 
             local selOk, selErr = tlib.selectItem("ultimate_logistical_transporter")
             if not selOk then
@@ -233,7 +229,12 @@ local function run()
                 error(string.format("place_transporters step %d: place() failed", p.transporterStep + 1))
             end
 
+            if p.transporterStep == 2 then
+                tlib.turnLeft()
+            end
+
             p.transporterStep = p.transporterStep + 1
+            
             saveTask()
             print(string.format("Transporter %d/5 placed.", p.transporterStep))
         end
