@@ -326,58 +326,103 @@ local function finalizeHarness()
     printSummary()
 end
 
-if not test.completed then
-    tlib.registerProgram("test.lua")
-end
+local function persistFatalError(err)
+    local message = tostring(err)
+    local stack = message
+    if debug and type(debug.traceback) == "function" then
+        stack = debug.traceback(message, 2)
+    end
 
-if test.phase == "boot" then
-    print("Initializing tlib self-test harness...")
-    setPhase("safe_tests")
-end
+    test.lastFatal = {
+        at = nowStamp(),
+        message = message,
+        traceback = stack,
+        phase = tostring(test.phase)
+    }
 
-if test.phase == "safe_tests" then
-    runSafeTests()
-    test.rebootToken = "reboot-" .. tostring(nowStamp())
-    test.rebootRequested = true
-    setPhase("post_reboot_verify")
-    print("Reboot checkpoint armed. Rebooting now to verify resume behavior...")
-    if rebootFn then
-        ccSleep(1)
-        rebootFn()
-    else
-        markWarn("RB-00", "os.reboot unavailable; skipping automatic reboot")
+    test.phase = "crashed"
+    test.rebootRequested = false
+    test.completed = false
+
+    record("FAIL", "FATAL-UNCAUGHT", "Unhandled error persisted to task state")
+
+    local ok, saveErr = pcall(saveTask)
+    if not ok then
+        ccPrintError("[FAIL] FATAL-SAVE - Unable to persist fatal error state: " .. tostring(saveErr))
+    end
+
+    ccPrintError("[FAIL] FATAL-UNCAUGHT - " .. message)
+    if stack ~= message then
+        ccPrintError(stack)
     end
 end
 
-if test.phase == "post_reboot_verify" then
-    if test.rebootRequested and not test.rebootVerified and test.rebootToken then
-        test.rebootVerified = true
-        record("PASS", "RB-01", "Resumed after reboot checkpoint with persisted phase/token")
-    else
-        record("FAIL", "RB-01", "Reboot verification state was incomplete")
+local function runHarness()
+    if not test.completed then
+        tlib.registerProgram("test.lua")
     end
 
-    setPhase("requirements_ui")
+    if test.phase == "boot" then
+        print("Initializing tlib self-test harness...")
+        setPhase("safe_tests")
+    end
+
+    if test.phase == "safe_tests" then
+        runSafeTests()
+        test.rebootToken = "reboot-" .. tostring(nowStamp())
+        test.rebootRequested = true
+        setPhase("post_reboot_verify")
+        print("Reboot checkpoint armed. Rebooting now to verify resume behavior...")
+        if rebootFn then
+            ccSleep(1)
+            rebootFn()
+        else
+            markWarn("RB-00", "os.reboot unavailable; skipping automatic reboot")
+        end
+    end
+
+    if test.phase == "post_reboot_verify" then
+        if test.rebootRequested and not test.rebootVerified and test.rebootToken then
+            test.rebootVerified = true
+            record("PASS", "RB-01", "Resumed after reboot checkpoint with persisted phase/token")
+        else
+            record("FAIL", "RB-01", "Reboot verification state was incomplete")
+        end
+
+        setPhase("requirements_ui")
+    end
+
+    if test.phase == "requirements_ui" then
+        runRequirementsUiProbe()
+        setPhase("destructive")
+    end
+
+    if test.phase == "destructive" then
+        runOptionalDestructiveTests()
+        setPhase("integration")
+    end
+
+    if test.phase == "integration" then
+        runOptionalIntegrationTests()
+        setPhase("finalize")
+    end
+
+    if test.phase == "finalize" then
+        finalizeHarness()
+    elseif test.phase == "done" then
+        printSummary()
+    elseif test.phase == "crashed" then
+        markWarn("FATAL-STATE", "Harness is in crashed phase; review taskState.tlibTest.lastFatal")
+        saveTask()
+    end
 end
 
-if test.phase == "requirements_ui" then
-    runRequirementsUiProbe()
-    setPhase("destructive")
-end
+local ok, err = xpcall(runHarness, function(e)
+    persistFatalError(e)
+    return e
+end)
 
-if test.phase == "destructive" then
-    runOptionalDestructiveTests()
-    setPhase("integration")
-end
-
-if test.phase == "integration" then
-    runOptionalIntegrationTests()
-    setPhase("finalize")
-end
-
-if test.phase == "finalize" then
-    finalizeHarness()
-elseif test.phase == "done" then
-    printSummary()
+if not ok then
+    return false, err
 end
  
