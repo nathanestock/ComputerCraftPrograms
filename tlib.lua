@@ -561,7 +561,6 @@ end
 
 function tlib.initialize()
     print("Initializing Turtle Systems...")
-    tlib.load()
     tlib.scanInventory()
 
     local leftHasLoader = isChunkLoader("left")
