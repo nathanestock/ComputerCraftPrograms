@@ -265,6 +265,7 @@ local function ensureDiamondPickaxeEquipped()
 
     local success, err = tlib.equip("minecraft:diamond_pickaxe", "right")
     if success then
+        sleep(0.1) -- Allow time for equip to register
         return true
     end
 
