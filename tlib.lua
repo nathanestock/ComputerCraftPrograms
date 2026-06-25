@@ -1070,4 +1070,26 @@ function tlib.showUI()
     parent.setCursorPos(1, 1)
 end
 
+-- =============================================================================
+-- CLI Entry Point
+-- =============================================================================
+
+local args = { ... }
+if args[1] == "install" or args[1] == "-i" then
+    local startupContent = [[local ok, tlib = pcall(require, "tlib")
+if ok then
+    tlib.startup()
+else
+    printError("Failed to load tlib: " .. tostring(tlib))
+end]]
+    local f = fs.open("startup.lua", "w")
+    if f then
+        f.write(startupContent)
+        f.close()
+        print("startup.lua installed. tlib will run automatically on next boot.")
+    else
+        printError("Failed to write startup.lua.")
+    end
+end
+
 return tlib
