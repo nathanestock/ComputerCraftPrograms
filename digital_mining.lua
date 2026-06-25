@@ -108,9 +108,6 @@ local function setupMiner(periph)
     if not periph.setRadius then
         error("setupMiner: Peripheral missing setRadius()")
     end
-    if not periph.createMinerTagFilter then
-        error("setupMiner: Peripheral missing createMinerTagFilter()")
-    end
     if not periph.addFilter then
         error("setupMiner: Peripheral missing addFilter()")
     end
