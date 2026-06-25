@@ -366,6 +366,23 @@ local function requireErrorAcknowledgement()
     end
 end
 
+local function requireResultVerification(runOk)
+    if type(ccRead) ~= "function" then
+        return
+    end
+
+    print("")
+    if runOk then
+        print("Review complete. Press Enter to verify results and exit...")
+    else
+        print("Review fatal error details above. Press Enter to verify and exit...")
+    end
+
+    ccRead()
+    test.userVerifiedAt = nowStamp()
+    saveTask()
+end
+
 local function runHarness()
     if not test.completed then
         tlib.registerProgram("test.lua")
@@ -433,6 +450,9 @@ end)
 
 if not ok then
     requireErrorAcknowledgement()
+    requireResultVerification(false)
     return false, err
 end
+
+requireResultVerification(true)
  
