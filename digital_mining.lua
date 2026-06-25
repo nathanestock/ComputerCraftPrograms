@@ -88,9 +88,43 @@ local function setupEntangloporter(periph)
     print("Entangloporter configured: ENERGY/FRONT=OUTPUT, ITEM/TOP=INPUT, ENERGY ejecting enabled")
 end
 
--- TODO: implement digital miner configuration (radius, filter, auto-start, etc.)
-local function setupMiner(periph) -- luacheck: ignore periph
-    print("Digital miner connected. Configuration: TODO")
+local function setupMiner(periph)
+    if not periph then
+        error("setupMiner: Missing digital miner peripheral")
+    end
+
+    if not periph.setAutoEject then
+        error("setupMiner: Peripheral missing setAutoEject()")
+    end
+    if not periph.setSilkTouch then
+        error("setupMiner: Peripheral missing setSilkTouch()")
+    end
+    if not periph.setMaxY then
+        error("setupMiner: Peripheral missing setMaxY()")
+    end
+    if not periph.setMinY then
+        error("setupMiner: Peripheral missing setMinY()")
+    end
+    if not periph.setRadius then
+        error("setupMiner: Peripheral missing setRadius()")
+    end
+    if not periph.createMinerTagFilter then
+        error("setupMiner: Peripheral missing createMinerTagFilter()")
+    end
+    if not periph.addFilter then
+        error("setupMiner: Peripheral missing addFilter()")
+    end
+
+    periph.setAutoEject(true)
+    periph.setSilkTouch(true)
+    periph.setMaxY(319)
+    periph.setMinY(-64)
+    periph.setRadius(32)
+
+    local filter = periph.createMinerTagFilter("*ores/diamond")
+    periph.addFilter(filter)
+
+    print("Digital miner configured: autoEject=true, silkTouch=true, y=[-64,319], radius=32, filter=*ores/diamond")
 end
 
 -- =============================================================================
