@@ -386,7 +386,7 @@ end
 
 local function printDetailedResultsFallback(detailEntries)
     print("")
-    print("Detailed results (FAIL/SKIP/WARN):")
+    print("=== Results (FAIL/SKIP/WARN) ===")
 
     for i, entry in ipairs(detailEntries) do
         local status = tostring(entry.status or "?")
@@ -428,7 +428,7 @@ local function printDetailedResultsInteractive(detailEntries)
         ccTerm.clear()
         ccTerm.setCursorPos(1, 1)
         setColor(ccColors and ccColors.lightBlue)
-        print("=== Detailed Results (FAIL/SKIP/WARN) ===")
+        print("=== Results (FAIL/SKIP/WARN) ===")
         resetColor()
         print(string.format("Showing %d-%d of %d", offset, math.min(offset + visibleRows - 1, #detailEntries), #detailEntries))
         print("Use Up/Down to scroll, Q to close")
