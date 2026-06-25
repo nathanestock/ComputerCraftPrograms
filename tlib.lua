@@ -269,11 +269,15 @@ end
 
 -- Marks a program as fully complete. Clears task state and program registration
 -- while preserving turtle navigation state (position, facing, inventory, hardware).
-function tlib.completeProgram()
+-- Pass reboot=true to trigger os.reboot() after clearing state.
+function tlib.completeProgram(reboot)
     state.resumeCommand = nil
     state.currentProgram = nil
     state.taskState = {}
     tlib.save()
+    if reboot then
+        os.reboot()
+    end
 end
 
 -- =============================================================================

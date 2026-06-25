@@ -548,5 +548,5 @@ if not ok then
 end
 
 requireResultVerification(true)
-tlib.completeProgram()
+tlib.completeProgram(true)
  
