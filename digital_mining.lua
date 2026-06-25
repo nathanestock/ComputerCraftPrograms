@@ -6,6 +6,7 @@ local plib = require("plib")
 -- =============================================================================
 local ccTurtle = rawget(_G, "turtle")
 local ccSleep  = rawget(_G, "sleep") or function(_) end
+local PERIPHERAL_CONNECT_DELAY = 1
 
 -- =============================================================================
 -- State Setup
@@ -218,6 +219,7 @@ local function run()
     -- setup_entangloporter: wrap peripheral and configure
     -- -------------------------------------------------------------------------
     if p.phase == "setup_entangloporter" then
+        ccSleep(PERIPHERAL_CONNECT_DELAY)
         local periph = plib.wrap("entangloporter", "quantumEntangloporter")
         if not periph then
             error("setup_entangloporter: Could not wrap entangloporter as peripheral")
@@ -253,6 +255,7 @@ local function run()
     -- setup_miner: wrap peripheral and configure digital miner
     -- -------------------------------------------------------------------------
     if p.phase == "setup_miner" then
+        ccSleep(PERIPHERAL_CONNECT_DELAY)
         local periph = plib.wrap("digitalMiner", "digitalMiner")
         if not periph then
             error("setup_miner: Could not wrap digital miner as peripheral")
