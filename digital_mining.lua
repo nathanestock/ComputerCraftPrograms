@@ -124,8 +124,8 @@ local function setupMiner(periph)
     end
 
     local diamondFilter = {
-        type = "TagFilter",
-        tagName = "c:ores/diamond"
+        ["type"] = "TagFilter",
+        ["tagName"] = "c:ores/diamond"
     }
 
     local success, err = periph.addFilter(diamondFilter)
