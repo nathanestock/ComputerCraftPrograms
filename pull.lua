@@ -21,6 +21,7 @@ local DEFAULT_CONFIG = {
 local function printUsage()
     print("Usage:")
     print("  pull init")
+    print("  pull -i")
     print("  pull refresh-pull")
     print("  pull -r")
     print("  pull use-github <program_name>")
@@ -211,19 +212,10 @@ local function runAudit()
     end
 end
 
--- Logic for 'init'
-if args[1] == "init" then
-    if not writeConfig(DEFAULT_CONFIG) then
-        printError("Failed to write " .. CONFIG_PATH)
-        return
-    end
-
-    print("Created pull_config.json with default mappings.")
-    return
-end
-
 local command = args[1]
-if command == "-r" then
+if command == "-i" then
+    command = "init"
+elseif command == "-r" then
     command = "refresh-pull"
 elseif command == "-g" then
     command = "use-github"
@@ -234,6 +226,16 @@ elseif command == "-a" then
 elseif startsWith(command, "-") then
     printError("Unknown flag: " .. command)
     printUsage()
+    return
+end
+
+if command == "init" then
+    if not writeConfig(DEFAULT_CONFIG) then
+        printError("Failed to write " .. CONFIG_PATH)
+        return
+    end
+
+    print("Created pull_config.json with default mappings.")
     return
 end
 
