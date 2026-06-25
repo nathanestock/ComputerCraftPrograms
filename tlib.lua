@@ -95,6 +95,17 @@ function tlib.startup()
     end
 
     local launchTarget = resumeCommand or resumeProgram
+    if (type(launchTarget) ~= "string" or launchTarget == "") and tlibTest and tlibTest.phase and tlibTest.phase ~= "done" then
+        -- Safety net: if test harness is mid-phase but resume target was not persisted,
+        -- recover via default test launcher rather than dropping to dashboard.
+        launchTarget = "test"
+    end
+
+    print(string.format("Boot resume check: phase=%s currentProgram=%s resumeCommand=%s",
+        tostring(tlibTest and tlibTest.phase),
+        tostring(loadedState.currentProgram),
+        tostring(loadedState.resumeCommand)))
+
     if type(launchTarget) == "string" and launchTarget ~= "" then
         print("\nRecovering state: Resuming " .. launchTarget)
         -- We don't use tlib.execute here because we are restarting the program loop,
