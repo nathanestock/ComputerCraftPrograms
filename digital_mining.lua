@@ -118,9 +118,17 @@ local function setupMiner(periph)
     periph.setMinY(-64)
     periph.setRadius(32)
 
-    local existingFilters = periph.getFilters()
-    for _, filter in ipairs(existingFilters) do
-        periph.removeFilter(filter)
+    periph.reset()
+
+    local existingFilters = periph.getFilters and periph.getFilters()
+    if existingFilters and #existingFilters > 0 then
+        print("setupMiner: Existing filters detected, clearing...")
+        for _, filter in ipairs(existingFilters) do
+            local success, err = periph.removeFilter(filter)
+            if not success then
+                error("setupMiner: Failed to remove existing filter: " .. tostring(err))
+            end
+        end
     end
 
     local filter = {
