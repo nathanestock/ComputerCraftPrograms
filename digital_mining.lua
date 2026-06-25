@@ -217,8 +217,9 @@ local function run()
         while p.transporterStep < 5 do
             mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
 
-            if p.transporterStep == 3 then
+            if p.transporterStep == 2 then
                 tlib.turnLeft()
+                mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
             end
 
             local selOk, selErr = tlib.selectItem("ultimate_logistical_transporter")
