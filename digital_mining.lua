@@ -6,7 +6,7 @@ local plib = require("plib")
 -- =============================================================================
 local ccTurtle = rawget(_G, "turtle")
 local ccSleep  = rawget(_G, "sleep") or function(_) end
-local PERIPHERAL_CONNECT_DELAY = 1
+local PERIPHERAL_CONNECT_DELAY = 100
 
 -- =============================================================================
 -- State Setup
