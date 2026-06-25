@@ -7,7 +7,7 @@ local plib = require("plib")
 local ccTurtle = rawget(_G, "turtle")
 local ccSleep  = rawget(_G, "sleep") or function(_) end
 local PERIPHERAL_CONNECT_DELAY = 1
-local ENTANGLOPORTER_FREQ = "digital_mining"
+local ENTANGLOPORTER_FREQ = "digital_miners"
 
 -- =============================================================================
 -- State Setup
@@ -296,7 +296,7 @@ local function run()
 
         print("Monitoring digital miner...")
 
-        ccSleep(10)
+        ccSleep(30)
 
         while true do
             local running   = periph.isRunning and periph.isRunning()
