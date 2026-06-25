@@ -92,6 +92,8 @@ local function run()
     if p.phase == "boot" then
         print("Digital Mining: Initializing...")
 
+        tlib.initialize()
+
         local x, y, z, facing = tlib.getPosition()
         p.homePos = { x = x, y = y, z = z, facing = facing }
         saveTask()
