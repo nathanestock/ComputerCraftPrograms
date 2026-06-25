@@ -1,13 +1,13 @@
-local tlib = require("tlib")
-local plib = require("plib")
+local tlib                     = require("tlib")
+local plib                     = require("plib")
 
 -- =============================================================================
 -- Cached Globals
 -- =============================================================================
-local ccTurtle = rawget(_G, "turtle")
-local ccSleep  = rawget(_G, "sleep") or function(_) end
+local ccTurtle                 = rawget(_G, "turtle")
+local ccSleep                  = rawget(_G, "sleep") or function(_) end
 local PERIPHERAL_CONNECT_DELAY = 1
-local ENTANGLOPORTER_FREQ = "digital_miners"
+local ENTANGLOPORTER_FREQ      = "digital_miners"
 
 -- =============================================================================
 -- State Setup
@@ -16,17 +16,17 @@ tlib.load()
 local task = tlib.getTaskState() or {}
 
 task.digitalMining = task.digitalMining or {
-    version           = 1,
-    phase             = "boot",
-    transporterStep   = 0,   -- 0–4: how many placement steps completed (1–3=back, 4=down)
-    teardownStep      = 0,   -- 0=up nav, 1–3=dig+forward per transporter
-    monitorChecks     = 0,
-    homePos           = nil, -- {x, y, z, facing} at boot
-    rebootToken       = nil,
-    rebootRequested   = false,
-    rebootVerified    = false,
-    completed         = false,
-    updatedAt         = os.time()
+    version         = 1,
+    phase           = "boot",
+    transporterStep = 0,     -- 0–4: how many placement steps completed (1–3=back, 4=down)
+    teardownStep    = 0,     -- 0=up nav, 1–3=dig+forward per transporter
+    monitorChecks   = 0,
+    homePos         = nil,   -- {x, y, z, facing} at boot
+    rebootToken     = nil,
+    rebootRequested = false,
+    rebootVerified  = false,
+    completed       = false,
+    updatedAt       = os.time()
 }
 
 local p = task.digitalMining
@@ -121,8 +121,20 @@ local function setupMiner(periph)
     periph.setMinY(-64)
     periph.setRadius(32)
 
-    local filter = periph.createMinerTagFilter("*ores/diamond")
-    periph.addFilter(filter)
+    local existingFilters = periph.getFilters()
+    for _, filter in ipairs(existingFilters) do
+        periph.removeFilter(filter)
+    end
+
+    local diamondFilter = {
+        type = "TagFilter",
+        tagName = "c:ores/diamond"
+    }
+
+    local success, err = periph.addFilter(diamondFilter)
+    if not success then
+        error("setupMiner: Failed to add filter: " .. tostring(err))
+    end
 
     print("Digital miner configured: autoEject=true, silkTouch=true, y=[-64,319], radius=32, filter=*ores/diamond")
 end
@@ -146,8 +158,8 @@ local function run()
         saveTask()
 
         tlib.scanInventory()
-        local minerCount        = countItem("digital_miner")
-        local transporterCount  = countItem("ultimate_logistical_transporter")
+        local minerCount          = countItem("digital_miner")
+        local transporterCount    = countItem("ultimate_logistical_transporter")
         local entangloporterCount = countItem("quantum_entangloporter")
 
         if minerCount < 1 then
@@ -191,11 +203,11 @@ local function run()
     -- From start (0,0,0) → (0,3,0) facing East
     -- -------------------------------------------------------------------------
     if p.phase == "nav_to_pipe_start" then
-        mv(tlib.back,    "nav_to_pipe_start: back(1)")
-        mv(tlib.back,    "nav_to_pipe_start: back(2)")
-        mv(tlib.up,      "nav_to_pipe_start: up(1)")
-        mv(tlib.up,      "nav_to_pipe_start: up(2)")
-        mv(tlib.up,      "nav_to_pipe_start: up(3)")
+        mv(tlib.back, "nav_to_pipe_start: back(1)")
+        mv(tlib.back, "nav_to_pipe_start: back(2)")
+        mv(tlib.up, "nav_to_pipe_start: up(1)")
+        mv(tlib.up, "nav_to_pipe_start: up(2)")
+        mv(tlib.up, "nav_to_pipe_start: up(3)")
         mv(tlib.forward, "nav_to_pipe_start: forward(1)")
         mv(tlib.forward, "nav_to_pipe_start: forward(2)")
         tlib.turnRight()
@@ -298,7 +310,7 @@ local function run()
         mv(tlib.forward, "nav_to_miner: forward(4)")
         mv(tlib.forward, "nav_to_miner: forward(5)")
         tlib.turnLeft()
-        mv(tlib.down,    "nav_to_miner: down(1)")
+        mv(tlib.down, "nav_to_miner: down(1)")
         mv(tlib.forward, "nav_to_miner: forward(6)")
         mv(tlib.forward, "nav_to_miner: forward(7)")
 
@@ -330,11 +342,11 @@ local function run()
 
         print("Monitoring digital miner...")
 
-        ccSleep(30)
+        ccSleep(10)
 
         while true do
-            local running   = periph.isRunning and periph.isRunning()
-            local minerState = periph.getState  and periph.getState()
+            local running    = periph.isRunning and periph.isRunning()
+            local minerState = periph.getState and periph.getState()
 
             print(string.format("[Check %d] State: %s | Running: %s",
                 p.monitorChecks, tostring(minerState), tostring(running)))
@@ -381,7 +393,7 @@ local function run()
     if p.phase == "nav_to_entangloporter_teardown" then
         mv(tlib.back, "nav_to_entangloporter_teardown: back(1)")
         mv(tlib.back, "nav_to_entangloporter_teardown: back(2)")
-        mv(tlib.up,   "nav_to_entangloporter_teardown: up(1)")
+        mv(tlib.up, "nav_to_entangloporter_teardown: up(1)")
         tlib.turnRight()
         mv(tlib.back, "nav_to_entangloporter_teardown: back(3)")
         mv(tlib.back, "nav_to_entangloporter_teardown: back(4)")
@@ -446,7 +458,7 @@ local function run()
         -- Steps 2–3: forward then dig (T2, T1); step 4: forward to (0,3,0)
         while p.teardownStep <= 4 do
             mv(tlib.forward,
-               string.format("teardown_transporters: forward (step %d)", p.teardownStep))
+                string.format("teardown_transporters: forward (step %d)", p.teardownStep))
 
             if p.teardownStep <= 3 then
                 local dug = tlib.dig()
@@ -475,11 +487,11 @@ local function run()
     -- -------------------------------------------------------------------------
     if p.phase == "return_home" then
         tlib.turnLeft()
-        mv(tlib.back,    "return_home: back(1)")
-        mv(tlib.back,    "return_home: back(2)")
-        mv(tlib.down,    "return_home: down(1)")
-        mv(tlib.down,    "return_home: down(2)")
-        mv(tlib.down,    "return_home: down(3)")
+        mv(tlib.back, "return_home: back(1)")
+        mv(tlib.back, "return_home: back(2)")
+        mv(tlib.down, "return_home: down(1)")
+        mv(tlib.down, "return_home: down(2)")
+        mv(tlib.down, "return_home: down(3)")
         mv(tlib.forward, "return_home: forward(1)")
         mv(tlib.forward, "return_home: forward(2)")
 
