@@ -70,9 +70,19 @@ end
 -- Peripheral Setup Stubs
 -- =============================================================================
 
--- TODO: implement quantum entangloporter configuration
-local function setupEntangloporter(periph) -- luacheck: ignore periph
-    print("Entangloporter connected. Configuration: TODO")
+local function setupEntangloporter(periph)
+    if not periph.setMode then
+        error("setupEntangloporter: Peripheral missing setMode()")
+    end
+    if not periph.setEjecting then
+        error("setupEntangloporter: Peripheral missing setEjecting()")
+    end
+
+    periph.setMode("ENERGY", "BACK", "OUTPUT")
+    periph.setMode("ITEM", "TOP", "INPUT")
+    periph.setEjecting("ENERGY", true)
+
+    print("Entangloporter configured: ENERGY/BACK=OUTPUT, ITEM/TOP=INPUT, ENERGY ejecting enabled")
 end
 
 -- TODO: implement digital miner configuration (radius, filter, auto-start, etc.)
