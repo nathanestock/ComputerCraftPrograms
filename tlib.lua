@@ -186,6 +186,9 @@ end
 -- Preserve the native ComputerCraft equip functions
 local nativeEquipLeft = turtle.equipLeft
 local nativeEquipRight = turtle.equipRight
+local nativeDig = turtle.dig
+local nativeDigUp = turtle.digUp
+local nativeDigDown = turtle.digDown
 
 -- Override equipLeft globally
 turtle.equipLeft = function()
@@ -219,6 +222,65 @@ turtle.equipRight = function()
     local success, err = nativeEquipRight()
     if success then tlib.scanInventory() end
     return success, err
+end
+
+local function getEquippedItemName(side)
+    local getter = (side == "left") and turtle.getEquippedLeft or turtle.getEquippedRight
+    if type(getter) == "function" then
+        local ok, itemName = pcall(getter)
+        if ok and type(itemName) == "string" then
+            return itemName
+        end
+    end
+
+    local pType = peripheral.getType(side)
+    if type(pType) == "string" then
+        return pType
+    end
+
+    return nil
+end
+
+local function isDiamondPickaxe(side)
+    local equippedName = getEquippedItemName(side)
+    return type(equippedName) == "string" and equippedName:find("diamond_pickaxe", 1, true) ~= nil
+end
+
+local function ensureDiamondPickaxeEquipped()
+    if isDiamondPickaxe("left") or isDiamondPickaxe("right") then
+        return true
+    end
+
+    local success, err = tlib.equip("minecraft:diamond_pickaxe", "right")
+    if success then
+        return true
+    end
+
+    return false, err or "Diamond pickaxe is required for digging"
+end
+
+turtle.dig = function(...)
+    local ok, err = ensureDiamondPickaxeEquipped()
+    if not ok then
+        return false, err
+    end
+    return nativeDig(...)
+end
+
+turtle.digUp = function(...)
+    local ok, err = ensureDiamondPickaxeEquipped()
+    if not ok then
+        return false, err
+    end
+    return nativeDigUp(...)
+end
+
+turtle.digDown = function(...)
+    local ok, err = ensureDiamondPickaxeEquipped()
+    if not ok then
+        return false, err
+    end
+    return nativeDigDown(...)
 end
 
 -- =============================================================================
