@@ -271,7 +271,7 @@ local function ensureDiamondPickaxeEquipped()
     return false, err or "Diamond pickaxe is required for digging"
 end
 
-turtle.dig = function(...)
+tlib.dig = function(...)
     local ok, err = ensureDiamondPickaxeEquipped()
     if not ok then
         return false, err
@@ -279,7 +279,7 @@ turtle.dig = function(...)
     return nativeDig(...)
 end
 
-turtle.digUp = function(...)
+tlib.digUp = function(...)
     local ok, err = ensureDiamondPickaxeEquipped()
     if not ok then
         return false, err
@@ -287,7 +287,7 @@ turtle.digUp = function(...)
     return nativeDigUp(...)
 end
 
-turtle.digDown = function(...)
+tlib.digDown = function(...)
     local ok, err = ensureDiamondPickaxeEquipped()
     if not ok then
         return false, err

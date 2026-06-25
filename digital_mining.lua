@@ -308,7 +308,7 @@ local function run()
     -- teardown_miner: dig the digital miner (currently above)
     -- -------------------------------------------------------------------------
     if p.phase == "teardown_miner" then
-        local dug = ccTurtle.digUp()
+        local dug = tlib.digUp()
         if not dug then
             error("teardown_miner: Failed to dig digital miner above")
         end
@@ -349,7 +349,7 @@ local function run()
     -- teardown_entangloporter: dig quantum entangloporter (in front)
     -- -------------------------------------------------------------------------
     if p.phase == "teardown_entangloporter" then
-        local dug = ccTurtle.dig()
+        local dug = tlib.dig()
         if not dug then
             error("teardown_entangloporter: Failed to dig quantum entangloporter")
         end
@@ -400,7 +400,7 @@ local function run()
                string.format("teardown_transporters: forward (step %d)", p.teardownStep))
 
             if p.teardownStep <= 3 then
-                local dug = ccTurtle.dig()
+                local dug = tlib.dig()
                 if not dug then
                     error(string.format("teardown_transporters: Failed to dig transporter (step %d)",
                         p.teardownStep))
