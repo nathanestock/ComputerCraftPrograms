@@ -1,3 +1,4 @@
+-- Turtle Library (tlib.lua)
 local tlib = {}
 
 local programs = {
