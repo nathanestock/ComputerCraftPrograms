@@ -339,7 +339,7 @@ local function run()
 
         print("Monitoring digital miner...")
 
-        ccSleep(10)
+        periph.start()
 
         while true do
             local running    = periph.isRunning and periph.isRunning()
