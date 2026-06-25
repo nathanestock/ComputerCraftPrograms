@@ -44,10 +44,7 @@ function tlib.isChunkLoaded() return state.hasChunkLoader end
 -- =============================================================================
 
 function tlib.startup()
-    -- 1. Initialize hardware, loaders, and GPS calibration
-    tlib.initialize()
-
-    -- 2. Check for an interrupted program
+    -- Check for an interrupted program
     local state = tlib.load()
 
     if state.currentProgram and fs.exists(state.currentProgram) then
@@ -56,7 +53,7 @@ function tlib.startup()
         -- not running a single block of logic.
         shell.run(state.currentProgram)
     else
-        -- 3. If nothing to resume, load the Dashboard
+        -- If nothing to resume, load the Dashboard
         print("\nSystem ready. Loading Dashboard...")
         sleep(0.5)
         tlib.showUI()
