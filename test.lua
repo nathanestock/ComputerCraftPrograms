@@ -11,7 +11,28 @@ local ccPrintError = rawget(_G, "printError") or function(msg)
 end
 local ccRead = rawget(_G, "read")
 local ccShell = rawget(_G, "shell")
+local ccTerm = rawget(_G, "term")
+local ccColors = rawget(_G, "colors")
 local rebootFn = os and os["reboot"]
+
+local statusColors = ccColors and {
+    PASS = ccColors.green,
+    FAIL = ccColors.red,
+    SKIP = ccColors.yellow,
+    WARN = ccColors.orange,
+}
+
+local function setColor(color)
+    if ccTerm and color and ccTerm.setTextColor then
+        ccTerm.setTextColor(color)
+    end
+end
+
+local function resetColor()
+    if ccTerm and ccTerm.setTextColor then
+        ccTerm.setTextColor(ccColors and ccColors.white or 1)
+    end
+end
 
 local function nowStamp()
     return os.time()
@@ -89,7 +110,9 @@ local function record(status, id, message)
     if status == "FAIL" then
         ccPrintError(line)
     else
+        setColor(statusColors and statusColors[status])
         print(line)
+        resetColor()
     end
 end
 
@@ -125,6 +148,27 @@ local function getResumeProgram()
         return runningProgram
     end
     return "test"
+end
+
+local function promptTestOptions()
+    if type(ccRead) ~= "function" then return end
+
+    print("")
+    if ccTerm and ccTerm.setTextColor and ccColors then
+        ccTerm.setTextColor(ccColors.lightBlue)
+    end
+    print("=== tlib Self-Test Configuration ===")
+    resetColor()
+
+    write("Enable destructive movement tests? (y/N): ")
+    local d = ccRead()
+    test.allowDestructive = (d == "y" or d == "Y")
+
+    write("Enable integration tests (GPS/Rednet)? (y/N): ")
+    local i = ccRead()
+    test.allowIntegration = (i == "y" or i == "Y")
+
+    print("")
 end
 
 local function runSafeTests()
@@ -320,11 +364,20 @@ end
 
 local function printSummary()
     print("")
+    if ccTerm and ccTerm.setTextColor and ccColors then
+        ccTerm.setTextColor(ccColors.lightBlue)
+    end
     print("=== tlib Self-Test Summary ===")
+    resetColor()
+    setColor(statusColors and statusColors.PASS)
     print("PASS: " .. tostring(test.counts.PASS))
+    setColor(statusColors and statusColors.FAIL)
     print("FAIL: " .. tostring(test.counts.FAIL))
+    setColor(statusColors and statusColors.SKIP)
     print("SKIP: " .. tostring(test.counts.SKIP))
+    setColor(statusColors and statusColors.WARN)
     print("WARN: " .. tostring(test.counts.WARN))
+    resetColor()
     print("Assertions logged: " .. tostring(#test.assertions))
     print("Phase: " .. tostring(test.phase))
     print("Completed: " .. tostring(test.completed))
@@ -413,6 +466,7 @@ local function runHarness()
             setPhase("post_reboot_verify")
         else
             print("Initializing tlib self-test harness...")
+            promptTestOptions()
             setPhase("safe_tests")
         end
     end
