@@ -227,9 +227,21 @@ end
 local function getEquippedItemName(side)
     local getter = (side == "left") and turtle.getEquippedLeft or turtle.getEquippedRight
     if type(getter) == "function" then
-        local ok, itemName = pcall(getter)
-        if ok and type(itemName) == "string" then
-            return itemName
+        local ok, equipped = pcall(getter)
+        if ok then
+            if type(equipped) == "string" then
+                return equipped
+            end
+
+            if type(equipped) == "table" then
+                if type(equipped.name) == "string" then
+                    return equipped.name
+                end
+
+                if type(equipped.id) == "string" then
+                    return equipped.id
+                end
+            end
         end
     end
 
