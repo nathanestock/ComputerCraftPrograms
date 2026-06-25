@@ -215,6 +215,10 @@ local function run()
     -- -------------------------------------------------------------------------
     if p.phase == "place_transporters" then
         while p.transporterStep < 5 do
+            if p.transporterStep == 2 then
+                tlib.turnLeft()
+            end
+
             mv(tlib.back, string.format("place_transporters: back (step %d)", p.transporterStep + 1))
 
 
@@ -227,10 +231,6 @@ local function run()
             local placed = ccTurtle.place()
             if not placed then
                 error(string.format("place_transporters step %d: place() failed", p.transporterStep + 1))
-            end
-
-            if p.transporterStep == 2 then
-                tlib.turnLeft()
             end
 
             p.transporterStep = p.transporterStep + 1
