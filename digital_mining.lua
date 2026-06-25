@@ -215,7 +215,7 @@ local function run()
     -- -------------------------------------------------------------------------
     if p.phase == "place_transporters" then
         while p.transporterStep < 5 do
-            if p.transporterStep == 2 then
+            if p.transporterStep == 1 then
                 tlib.turnLeft()
             end
 
