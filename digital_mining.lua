@@ -371,7 +371,7 @@ local function run()
         -- Step 0: up to T4 level, dig T4
         if p.teardownStep == 0 then
             mv(tlib.up, "teardown_transporters: up to T4")
-            local dug = ccTurtle.dig()
+            local dug = tlib.dig()
             if not dug then
                 error("teardown_transporters: Failed to dig T4")
             end
@@ -384,7 +384,7 @@ local function run()
         -- Step 1: up to T3 level, dig T3
         if p.teardownStep == 1 then
             mv(tlib.up, "teardown_transporters: up to T3")
-            local dug = ccTurtle.dig()
+            local dug = tlib.dig()
             if not dug then
                 error("teardown_transporters: Failed to dig T3")
             end
