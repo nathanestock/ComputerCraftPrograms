@@ -325,21 +325,21 @@ local function run()
         periph.start()
 
         while true do
-            local running    = periph.isRunning and periph.isRunning()
-            local minerState = periph.getState and periph.getState()
+            local toMine = periph.getToMine and periph.getToMine()
 
-            print(string.format("[Check %d] State: %s | Running: %s",
-                p.monitorChecks, tostring(minerState), tostring(running)))
+            print(string.format("[Check %d] ToMine: %s", p.monitorChecks, tostring(toMine)))
 
             p.monitorChecks = p.monitorChecks + 1
             saveTask()
 
-            if not running then
-                print("Digital miner has completed operation.")
+            if toMine == 0 then
+                print("Nothing left to mine. Stopping digital miner...")
+                periph.stop()
+                ccSleep(5)
                 break
             end
 
-            ccSleep(5)
+            ccSleep(1)
         end
 
         setPhase("teardown_miner")
