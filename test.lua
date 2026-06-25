@@ -10,6 +10,7 @@ local ccPrintError = rawget(_G, "printError") or function(msg)
     print(msg)
 end
 local ccRead = rawget(_G, "read")
+local ccShell = rawget(_G, "shell")
 local rebootFn = os and os["reboot"]
 
 local function nowStamp()
@@ -110,6 +111,14 @@ end
 
 local function hasFunction(name)
     return type(tlib[name]) == "function"
+end
+
+local function getResumeProgram()
+    local runningProgram = ccShell and ccShell.getRunningProgram and ccShell.getRunningProgram() or nil
+    if type(runningProgram) == "string" and runningProgram ~= "" then
+        return runningProgram
+    end
+    return "test.lua"
 end
 
 local function runSafeTests()
@@ -385,7 +394,10 @@ end
 
 local function runHarness()
     if not test.completed then
-        tlib.registerProgram("test.lua")
+        local resumeProgram = getResumeProgram()
+        test.resumeProgram = resumeProgram
+        tlib.registerProgram(resumeProgram)
+        saveTask()
     end
 
     if test.phase == "boot" then
@@ -395,9 +407,20 @@ local function runHarness()
 
     if test.phase == "safe_tests" then
         runSafeTests()
+        local resumeProgram = test.resumeProgram or getResumeProgram()
+        test.resumeProgram = resumeProgram
+        tlib.registerProgram(resumeProgram)
         test.rebootToken = "reboot-" .. tostring(nowStamp())
         test.rebootRequested = true
         setPhase("post_reboot_verify")
+
+        local persistedState = tlib.load()
+        local persistedProgram = persistedState and persistedState.currentProgram
+        if not persistedProgram then
+            record("FAIL", "RB-00", "Resume program was not persisted; skipping reboot")
+            return
+        end
+
         print("Reboot checkpoint armed. Rebooting now to verify resume behavior...")
         if rebootFn then
             ccSleep(1)

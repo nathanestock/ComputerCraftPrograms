@@ -31,6 +31,41 @@ local state = {
 
 local STATE_FILE = "turtle_state.json"
 
+local function resolveProgramPath(programName)
+    if type(programName) ~= "string" or programName == "" then
+        return nil
+    end
+
+    local candidates = { programName }
+    if not programName:match("%.lua$") then
+        table.insert(candidates, programName .. ".lua")
+    end
+
+    if shell and type(shell.resolveProgram) == "function" then
+        for _, candidate in ipairs(candidates) do
+            local resolved = shell.resolveProgram(candidate)
+            if resolved and fs.exists(resolved) then
+                return resolved
+            end
+        end
+    end
+
+    for _, candidate in ipairs(candidates) do
+        if fs.exists(candidate) then
+            return candidate
+        end
+
+        if candidate:sub(1, 1) ~= "/" then
+            local rooted = "/" .. candidate
+            if fs.exists(rooted) then
+                return rooted
+            end
+        end
+    end
+
+    return programName
+end
+
 
 
 function tlib.isGpsAvailable() return state.gpsAvailable end
@@ -46,12 +81,20 @@ function tlib.isChunkLoaded() return state.hasChunkLoader end
 function tlib.startup()
     -- Check for an interrupted program
     local state = tlib.load()
+    local resumeProgram = resolveProgramPath(state.currentProgram)
 
-    if state.currentProgram and fs.exists(state.currentProgram) then
-        print("\nRecovering state: Resuming " .. state.currentProgram)
+    if not resumeProgram then
+        local tlibTest = state.taskState and state.taskState.tlibTest
+        if tlibTest and tlibTest.phase and tlibTest.phase ~= "done" then
+            resumeProgram = resolveProgramPath(tlibTest.resumeProgram)
+        end
+    end
+
+    if resumeProgram and fs.exists(resumeProgram) then
+        print("\nRecovering state: Resuming " .. resumeProgram)
         -- We don't use tlib.execute here because we are restarting the program loop,
         -- not running a single block of logic.
-        shell.run(state.currentProgram)
+        shell.run(resumeProgram)
     else
         -- If nothing to resume, load the Dashboard
         print("\nSystem ready. Loading Dashboard...")
@@ -148,7 +191,7 @@ function tlib.setTaskState(tState)
 end
 
 function tlib.registerProgram(programName)
-    state.currentProgram = programName
+    state.currentProgram = resolveProgramPath(programName)
     tlib.save()
 end
 
