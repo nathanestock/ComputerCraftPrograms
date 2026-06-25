@@ -168,6 +168,15 @@ local function updateProgram(programName, sourceValue)
     return success
 end
 
+local function saveDiscoveredSource(config, programName, sourceValue)
+    config[programName] = sourceValue
+    if not writeConfig(config) then
+        printError("Failed to write " .. CONFIG_PATH)
+        return false
+    end
+    return true
+end
+
 local function sourceLabel(sourceValue)
     if sourceValue == "" then
         return "github(default)"
@@ -339,8 +348,26 @@ end
 
 local sourceValue = config[programName]
 if sourceValue == nil then
-    printError("Program '" .. programName .. "' not found in config.")
-    return
+    local defaultSource = DEFAULT_CONFIG[programName]
+    if defaultSource ~= nil then
+        sourceValue = trim(defaultSource)
+        if not saveDiscoveredSource(config, programName, sourceValue) then
+            return
+        end
+        print("Added '" .. programName .. "' to config from defaults.")
+    else
+        print("Program '" .. programName .. "' not found in config/defaults. Checking GitHub...")
+        if updateProgram(programName, "") then
+            if not saveDiscoveredSource(config, programName, "") then
+                return
+            end
+            print("Success: " .. programName .. " downloaded from GitHub and added to config.")
+            return
+        end
+
+        printError("Program '" .. programName .. "' not found in config/defaults and could not be fetched from GitHub.")
+        return
+    end
 end
 
 if type(sourceValue) ~= "string" then
