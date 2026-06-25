@@ -438,9 +438,9 @@ local function requireResultVerification(runOk)
 
     print("")
     if runOk then
-        print("Review complete. Press Enter to verify results and exit...")
+        print("Review complete. Press Enter to verify results and reboot...")
     else
-        print("Review fatal error details above. Press Enter to verify and exit...")
+        print("Review fatal error details above. Press Enter to verify and reboot...")
     end
 
     ccRead()
