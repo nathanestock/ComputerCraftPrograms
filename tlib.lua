@@ -22,6 +22,7 @@ local state = {
     z = 0,
     facing = 0,
     currentProgram = nil,
+    resumeCommand = nil,
     taskState = {},
     inventory = {},      -- Cache structure: [slot] = { name = "minecraft:coal", count = 64 }
     gpsAvailable = false,
@@ -80,27 +81,36 @@ function tlib.isChunkLoaded() return state.hasChunkLoader end
 
 function tlib.startup()
     -- Check for an interrupted program
-    local state = tlib.load()
-    local resumeProgram = resolveProgramPath(state.currentProgram)
+    local loadedState = tlib.load()
+    local tlibTest = loadedState.taskState and loadedState.taskState.tlibTest
 
-    if not resumeProgram then
-        local tlibTest = state.taskState and state.taskState.tlibTest
-        if tlibTest and tlibTest.phase and tlibTest.phase ~= "done" then
-            resumeProgram = resolveProgramPath(tlibTest.resumeProgram)
-        end
+    local resumeCommand = loadedState.resumeCommand
+    if (type(resumeCommand) ~= "string" or resumeCommand == "") and tlibTest and tlibTest.phase and tlibTest.phase ~= "done" then
+        resumeCommand = tlibTest.resumeCommand
     end
 
-    if resumeProgram and fs.exists(resumeProgram) then
-        print("\nRecovering state: Resuming " .. resumeProgram)
+    local resumeProgram = resolveProgramPath(loadedState.currentProgram)
+    if not resumeProgram and tlibTest and tlibTest.phase and tlibTest.phase ~= "done" then
+        resumeProgram = resolveProgramPath(tlibTest.resumeProgram)
+    end
+
+    local launchTarget = resumeCommand or resumeProgram
+    if type(launchTarget) == "string" and launchTarget ~= "" then
+        print("\nRecovering state: Resuming " .. launchTarget)
         -- We don't use tlib.execute here because we are restarting the program loop,
         -- not running a single block of logic.
-        shell.run(resumeProgram)
-    else
-        -- If nothing to resume, load the Dashboard
-        print("\nSystem ready. Loading Dashboard...")
-        sleep(0.5)
-        tlib.showUI()
+        local ok = shell.run(launchTarget)
+        if ok then
+            return
+        end
+
+        printError("Resume launch failed for: " .. tostring(launchTarget))
     end
+
+    -- If nothing to resume or launch fails, load the Dashboard
+    print("\nSystem ready. Loading Dashboard...")
+    sleep(0.5)
+    tlib.showUI()
 end
 
 -- =============================================================================
@@ -191,11 +201,13 @@ function tlib.setTaskState(tState)
 end
 
 function tlib.registerProgram(programName)
+    state.resumeCommand = programName
     state.currentProgram = resolveProgramPath(programName)
     tlib.save()
 end
 
 function tlib.clearProgram()
+    state.resumeCommand = nil
     state.currentProgram = nil
     state.taskState = {}
     tlib.save()

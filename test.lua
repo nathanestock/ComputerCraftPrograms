@@ -396,6 +396,7 @@ local function runHarness()
     if not test.completed then
         local resumeProgram = getResumeProgram()
         test.resumeProgram = resumeProgram
+        test.resumeCommand = resumeProgram
         tlib.registerProgram(resumeProgram)
         saveTask()
     end
@@ -409,6 +410,7 @@ local function runHarness()
         runSafeTests()
         local resumeProgram = test.resumeProgram or getResumeProgram()
         test.resumeProgram = resumeProgram
+        test.resumeCommand = resumeProgram
         tlib.registerProgram(resumeProgram)
         test.rebootToken = "reboot-" .. tostring(nowStamp())
         test.rebootRequested = true
