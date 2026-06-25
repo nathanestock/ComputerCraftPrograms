@@ -230,13 +230,15 @@ local function run()
     end
 
     -- -------------------------------------------------------------------------
-    -- nav_to_miner: turnRight, forward×2, turnLeft, forward×3, turnLeft
+    -- nav_to_miner: move around entangloporter and return under miner
     -- (-3,1,0) facing East
     --   → turnRight → facing South
     --   → forward×2 → (-3,1,2)
     --   → turnLeft  → facing East
     --   → forward×3 → (0,1,2)
-    --   → turnLeft  → facing North (front middle of digital miner) ✓
+    --   → turnLeft  → facing North
+    --   → down      → (0,0,2)
+    --   → forward×2 → (0,0,0) facing North (miner above at (0,1,0)) ✓
     -- -------------------------------------------------------------------------
     if p.phase == "nav_to_miner" then
         tlib.turnRight()
@@ -247,6 +249,9 @@ local function run()
         mv(tlib.forward, "nav_to_miner: forward(4)")
         mv(tlib.forward, "nav_to_miner: forward(5)")
         tlib.turnLeft()
+        mv(tlib.down,    "nav_to_miner: down(1)")
+        mv(tlib.forward, "nav_to_miner: forward(6)")
+        mv(tlib.forward, "nav_to_miner: forward(7)")
 
         setPhase("setup_miner")
     end
@@ -298,12 +303,12 @@ local function run()
     end
 
     -- -------------------------------------------------------------------------
-    -- teardown_miner: dig the digital miner (currently in front)
+    -- teardown_miner: dig the digital miner (currently above)
     -- -------------------------------------------------------------------------
     if p.phase == "teardown_miner" then
-        local dug = ccTurtle.dig()
+        local dug = ccTurtle.digUp()
         if not dug then
-            error("teardown_miner: Failed to dig digital miner")
+            error("teardown_miner: Failed to dig digital miner above")
         end
 
         tlib.scanInventory()
@@ -313,7 +318,9 @@ local function run()
 
     -- -------------------------------------------------------------------------
     -- nav_to_entangloporter_teardown: reverse of nav_to_miner
-    -- (0,1,2) facing North
+    -- (0,0,0) facing North
+    --   → back×2    → (0,0,2)
+    --   → up        → (0,1,2)
     --   → turnRight → facing East
     --   → back×3    → (-3,1,2)
     --   → turnRight → facing South
@@ -321,13 +328,16 @@ local function run()
     --   → turnLeft  → facing East (entangloporter at (-2,1,0) in front) ✓
     -- -------------------------------------------------------------------------
     if p.phase == "nav_to_entangloporter_teardown" then
-        tlib.turnRight()
         mv(tlib.back, "nav_to_entangloporter_teardown: back(1)")
         mv(tlib.back, "nav_to_entangloporter_teardown: back(2)")
-        mv(tlib.back, "nav_to_entangloporter_teardown: back(3)")
+        mv(tlib.up,   "nav_to_entangloporter_teardown: up(1)")
         tlib.turnRight()
+        mv(tlib.back, "nav_to_entangloporter_teardown: back(3)")
         mv(tlib.back, "nav_to_entangloporter_teardown: back(4)")
         mv(tlib.back, "nav_to_entangloporter_teardown: back(5)")
+        tlib.turnRight()
+        mv(tlib.back, "nav_to_entangloporter_teardown: back(6)")
+        mv(tlib.back, "nav_to_entangloporter_teardown: back(7)")
         tlib.turnLeft()
 
         setPhase("teardown_entangloporter")
