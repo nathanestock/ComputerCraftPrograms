@@ -9,6 +9,7 @@ end
 local ccPrintError = rawget(_G, "printError") or function(msg)
     print(msg)
 end
+local ccRead = rawget(_G, "read")
 local rebootFn = os and os["reboot"]
 
 local function nowStamp()
@@ -357,6 +358,14 @@ local function persistFatalError(err)
     end
 end
 
+local function requireErrorAcknowledgement()
+    if type(ccRead) == "function" then
+        print("")
+        print("A fatal error occurred. Press Enter to continue...")
+        ccRead()
+    end
+end
+
 local function runHarness()
     if not test.completed then
         tlib.registerProgram("test.lua")
@@ -423,6 +432,7 @@ local ok, err = xpcall(runHarness, function(e)
 end)
 
 if not ok then
+    requireErrorAcknowledgement()
     return false, err
 end
  
