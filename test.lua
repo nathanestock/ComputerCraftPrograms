@@ -390,7 +390,6 @@ local function finalizeHarness()
     test.phase = "done"
     saveTask()
     printSummary()
-    tlib.completeProgram()
 end
 
 local function persistFatalError(err)
@@ -549,4 +548,5 @@ if not ok then
 end
 
 requireResultVerification(true)
+tlib.completeProgram()
  
