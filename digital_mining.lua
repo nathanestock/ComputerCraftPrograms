@@ -8,6 +8,7 @@ local ccTurtle                 = rawget(_G, "turtle")
 local ccSleep                  = rawget(_G, "sleep") or function(_) end
 local PERIPHERAL_CONNECT_DELAY = 1
 local ENTANGLOPORTER_FREQ      = "digital_miners"
+local ENTANGLOPORTER_REFUEL_FREQ = "lava_buckets"
 
 -- =============================================================================
 -- State Setup
@@ -159,7 +160,7 @@ local function run()
         local strategyOk, strategyErr = tlib.useRefuelStrategy("entangloporter", {
             side = "up",
             entangloporterItem = "quantum_entangloporter",
-            entangloporterFrequency = ENTANGLOPORTER_FREQ,
+            entangloporterFrequency = ENTANGLOPORTER_REFUEL_FREQ,
             fuelItemPattern = "lava_bucket",
             pullCount = 16,
             maxCycles = 8,
