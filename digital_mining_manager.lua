@@ -937,6 +937,13 @@ local function eventLoop()
         error("Failed to open rednet modem: " .. tostring(openErr))
     end
 
+    local mailboxOk, mailboxResult = nlib.discoverMailboxServer()
+    if mailboxOk then
+        print("Mailbox server discovered: ID " .. tostring(mailboxResult))
+    else
+        print("Mailbox server not found: " .. tostring(mailboxResult))
+    end
+
     local okHost, hostErr = nlib.host(state.manager.protocol, state.manager.label)
     if not okHost then
         error("Failed to host manager protocol: " .. tostring(hostErr))

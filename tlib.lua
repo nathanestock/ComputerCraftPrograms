@@ -1299,6 +1299,9 @@ bindNlibMethod("listenStatus")
 bindNlibMethod("checkOfflineMessages")
 bindNlibMethod("pingMailbox")
 bindNlibMethod("ackMailboxMessage")
+bindNlibMethod("setActiveMailboxServer")
+bindNlibMethod("getActiveMailboxServer")
+bindNlibMethod("discoverMailboxServer")
 
 -- =============================================================================
 -- Initialize Method (Respects Single-Loader Lock & Calibrates GPS)
@@ -1345,6 +1348,13 @@ function tlib.initialize()
     tlib.save()
     if not gpsSuccess then
         print("GPS Unavailable. Restored local coordinate tracking: " .. tostring(gpsErr))
+    end
+
+    local mailboxOk, mailboxResult = tlib.discoverMailboxServer()
+    if mailboxOk then
+        print("Mailbox server discovered: ID " .. tostring(mailboxResult))
+    else
+        print("Mailbox server not found: " .. tostring(mailboxResult))
     end
 
     local ok, err = tlib.broadcastStatus("System Initialized")
