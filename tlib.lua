@@ -1188,6 +1188,48 @@ function tlib.checkOfflineMessages(mailboxServerID)
     return success, messages
 end
 
+function tlib.installMailbox()
+    local mailboxProgram = "tlib_mailbox"
+    local mailboxPath = resolveProgramPath(mailboxProgram)
+
+    if not (type(mailboxPath) == "string" and fs.exists(mailboxPath)) then
+        local sh = shell or _G.shell
+        if not sh then
+            return false, "Shell is unavailable. Cannot install tlib_mailbox."
+        end
+
+        local ok, pullResult = pcall(function()
+            return sh.run("pull", mailboxProgram)
+        end)
+
+        if not ok or not pullResult then
+            local reason = ok and "pull returned false" or tostring(pullResult)
+            return false, "Failed to install tlib_mailbox: " .. reason
+        end
+
+        mailboxPath = resolveProgramPath(mailboxProgram)
+        if not (type(mailboxPath) == "string" and fs.exists(mailboxPath)) then
+            return false, "tlib_mailbox installed, but program path was not found"
+        end
+    end
+
+    local startupContent = [[local sh = shell or _G.shell
+if sh then
+    sh.run("tlib_mailbox")
+else
+    os.run({}, "tlib_mailbox")
+end]]
+
+    local f = fs.open("startup.lua", "w")
+    if not f then
+        return false, "Failed to write startup.lua"
+    end
+
+    f.write(startupContent)
+    f.close()
+    return true, "startup.lua installed for tlib_mailbox"
+end
+
 -- =============================================================================
 -- Initialize Method (Respects Single-Loader Lock & Calibrates GPS)
 -- =============================================================================
