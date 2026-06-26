@@ -182,7 +182,7 @@ local function runInventoryRefuelStrategy(options)
     return false, "No consumable fuel found in inventory"
 end
 
-local function configureEntangloporterForFuel(peripheralObj, sideKey)
+local function configureEntangloporterForFuel(peripheralObj, frequency, sideKey)
     if type(peripheralObj) ~= "table" then
         return false, "Invalid entangloporter peripheral"
     end
@@ -195,6 +195,11 @@ local function configureEntangloporterForFuel(peripheralObj, sideKey)
     local ok, err = pcall(peripheralObj.setMode, "ITEM", sideConfig.entangloporterSide, "INPUT_OUTPUT")
     if not ok then
         return false, "setMode ITEM INPUT_OUTPUT failed: " .. tostring(err)
+    end
+
+    local ok2, err2 = pcall(peripheralObj.setFrequency, frequency)
+    if not ok2 then
+        return false, "setFrequency FUEL failed: " .. tostring(err2)
     end
 
     return true
@@ -310,7 +315,7 @@ local function runEntangloporterRefuelStrategy(options)
         return false, "Failed to wrap entangloporter peripheral on " .. ops.sideName
     end
 
-    local configOk, configErr = configureEntangloporterForFuel(peripheralObj, cfg.side)
+    local configOk, configErr = configureEntangloporterForFuel(peripheralObj, cfg.entangloporterFrequency, cfg.side)
     if not configOk then
         cleanup()
         return false, configErr

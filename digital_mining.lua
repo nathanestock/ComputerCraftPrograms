@@ -159,6 +159,7 @@ local function run()
         local strategyOk, strategyErr = tlib.useRefuelStrategy("entangloporter", {
             side = "up",
             entangloporterItem = "quantum_entangloporter",
+            entangloporterFrequency = ENTANGLOPORTER_FREQ,
             fuelItemPattern = "lava_bucket",
             pullCount = 16,
             maxCycles = 8,
