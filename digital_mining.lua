@@ -406,46 +406,43 @@ local function resolveManagerSelection()
     end
 
     print("No manager configured. Discovering digital mining managers...")
-    local broadcastTxOk, broadcastOk, broadcastErr = tlib.runRednetTransaction(function()
-        local ok, err = nlib.open()
-        if not ok then
-            return false, err
+    local discoverTxOk, candidatesOrErr, discoverErr = tlib.runRednetTransaction(function()
+        if not rednet then
+            return nil, "rednet unavailable"
         end
 
-        return nlib.broadcast({
+        rednet.broadcast({
             messageType = "discover_manager",
             workerId = computerID(),
             workerLabel = computerLabel(),
             sentAt = nowSeconds()
         }, DISCOVERY_PROTOCOL)
-    end)
-    if not broadcastTxOk then
-        error("resolveManagerSelection: broadcast transaction failed: " .. tostring(broadcastOk))
-    end
-    if not broadcastOk then
-        error("resolveManagerSelection: discovery broadcast failed: " .. tostring(broadcastErr))
-    end
 
-    local candidates = {}
-    local started = nowSeconds()
-    while nowSeconds() - started < 3 do
-        local txOk, got, resp = tlib.runRednetTransaction(function()
-            return nlib.receive(DISCOVERY_PROTOCOL, 0.75)
-        end)
-        if not txOk then
-            error("resolveManagerSelection: discovery receive transaction failed: " .. tostring(got))
-        end
-        if got and resp and type(resp.payload) == "table" then
-            local payload = resp.payload
-            if payload.messageType == "manager_announce" and type(payload.managerLabel) == "string" then
-                local protocol = tostring(payload.managerProtocol or ("digital_mining_" .. payload.managerLabel))
-                candidates[#candidates + 1] = {
-                    managerLabel = payload.managerLabel,
-                    managerProtocol = protocol,
-                    managerID = resp.sender_id
-                }
+        local discovered = {}
+        local started = nowSeconds()
+        while nowSeconds() - started < 3 do
+            local senderID, payload = rednet.receive(DISCOVERY_PROTOCOL, 0.75)
+            if senderID and type(payload) == "table" then
+                if payload.messageType == "manager_announce" and type(payload.managerLabel) == "string" then
+                    local protocol = tostring(payload.managerProtocol or ("digital_mining_" .. payload.managerLabel))
+                    discovered[#discovered + 1] = {
+                        managerLabel = payload.managerLabel,
+                        managerProtocol = protocol,
+                        managerID = senderID
+                    }
+                end
             end
         end
+
+        return discovered
+    end)
+    if not discoverTxOk then
+        error("resolveManagerSelection: discovery transaction failed: " .. tostring(candidatesOrErr))
+    end
+
+    local candidates = candidatesOrErr
+    if type(candidates) ~= "table" then
+        error("resolveManagerSelection: discovery failed: " .. tostring(discoverErr))
     end
 
     if #candidates == 0 then
