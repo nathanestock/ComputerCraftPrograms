@@ -399,9 +399,8 @@ local function runOptionalIntegrationTests()
             local serverId = replyType == "table" and pingReply.server_id or nil
             record("PASS", "INT-05", "pingMailbox succeeded; server_id=" .. tostring(serverId))
 
-            local computerIdFn = rawget(_G.os, "getComputerID")
-            if type(computerIdFn) == "function" then
-                local targetId = computerIdFn()
+            local targetId = tonumber(serverId)
+            if targetId then
                 local testMessage = "tlib mailbox integration test @" .. tostring(nowStamp())
                 local sendOk, sendReply = tlib.sendStatusViaMailbox(targetId, testMessage, false, serverId)
 
@@ -425,7 +424,7 @@ local function runOptionalIntegrationTests()
                     markWarn("INT-06", "sendStatusViaMailbox failed: " .. tostring(sendReply))
                 end
             else
-                markSkip("INT-06", "Skipped mailbox send test because getComputerID API is unavailable")
+                markSkip("INT-06", "Skipped mailbox send test because mailbox server_id was unavailable")
             end
 
             local fetchOk, fetched = tlib.checkOfflineMessages(serverId)
