@@ -1473,7 +1473,7 @@ local function drawDashboard(win, w, h, programs, selectedIndex)
     -- Footer
     win.setCursorPos(1, h)
     win.setTextColor(colors.yellow)
-    win.write("[Enter] Run  [T] Term  [Q] Quit")
+    win.write("[Enter] Run  [U] Update  [T] Term  [Q] Quit")
 
     win.setVisible(true) -- Show after drawing is finished
 end
@@ -1531,6 +1531,52 @@ function tlib.showUI()
         if mode == "dashboard" then
             drawDashboard(dashboardWin, w, h, programs, selectedIndex)
         end
+    end
+
+    local function runUpdates()
+        term.redirect(parent)
+        parent.clear()
+        parent.setCursorPos(1, 1)
+        print("Running update sequence...\n")
+
+        local sh = shell or _G.shell
+        if not sh then
+            printError("Shell is unavailable. Cannot run pull updates.")
+            print("\nPress any key to return to Control...")
+            os.pullEvent("key")
+            term.redirect(dashboardWin)
+            return
+        end
+
+        local targets = { "tlib", "plib" }
+        for i = 1, #programs do
+            table.insert(targets, programs[i])
+        end
+
+        local okCount = 0
+        local failCount = 0
+
+        for i = 1, #targets do
+            local target = targets[i]
+            print(string.format("[%d/%d] pull %s", i, #targets, target))
+            local ok, pullResult = pcall(function()
+                return sh.run("pull", target)
+            end)
+
+            if ok and pullResult then
+                okCount = okCount + 1
+                print("  OK")
+            else
+                failCount = failCount + 1
+                local reason = ok and "pull returned false" or tostring(pullResult)
+                printError("  Failed: " .. reason)
+            end
+        end
+
+        print(string.format("\nUpdate complete. Success: %d  Failed: %d", okCount, failCount))
+        print("Press any key to return to Control...")
+        os.pullEvent("key")
+        term.redirect(dashboardWin)
     end
 
     redraw()
@@ -1591,6 +1637,9 @@ function tlib.showUI()
                         term.redirect(dashboardWin)
                         redraw()
                     end
+                elseif key == keys.u then
+                    runUpdates()
+                    redraw()
                 elseif key == keys.t then
                     mode = "terminal"
                     redraw()
