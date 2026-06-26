@@ -411,11 +411,7 @@ local function resolveManagerSelection()
 
     print("No manager configured. Discovering digital mining managers...")
     local discoverTxOk, candidatesOrErr, discoverErr = tlib.runRednetTransaction(function()
-        if not rednet then
-            return nil, "rednet unavailable"
-        end
-
-        rednet.broadcast({
+        nlib.broadcast({
             messageType = "discover_manager",
             workerId = computerID(),
             workerLabel = computerLabel(),
@@ -425,7 +421,7 @@ local function resolveManagerSelection()
         local discovered = {}
         local started = nowSeconds()
         while nowSeconds() - started < 3 do
-            local senderID, payload = rednet.receive(DISCOVERY_PROTOCOL, 0.75)
+            local senderID, payload = nlib.receive(DISCOVERY_PROTOCOL, 0.75)
             if senderID and type(payload) == "table" then
                 if payload.messageType == "manager_announce" and type(payload.managerLabel) == "string" then
                     local protocol = tostring(payload.managerProtocol or ("digital_mining_" .. payload.managerLabel))
