@@ -1654,57 +1654,6 @@ function tlib.showUI()
         end
     end
 
-    local function runUpdates()
-        term.redirect(parent)
-        parent.clear()
-        parent.setCursorPos(1, 1)
-        print("Running update sequence...\n")
-
-        local sh = shell or _G.shell
-        if not sh then
-            printError("Shell is unavailable. Cannot run pull updates.")
-            print("\nPress any key to return to Control...")
-            os.pullEvent("key")
-            term.redirect(dashboardWin)
-            return
-        end
-
-        local targets = {}
-
-        for i = 1, #dependencies do
-            table.insert(targets, dependencies[i])
-        end
-
-        for i = 1, #programs do
-            table.insert(targets, programs[i])
-        end
-
-        local okCount = 0
-        local failCount = 0
-
-        for i = 1, #targets do
-            local target = targets[i]
-            print(string.format("[%d/%d] pull %s", i, #targets, target))
-            local ok, pullResult = pcall(function()
-                return sh.run("pull", target)
-            end)
-
-            if ok and pullResult then
-                okCount = okCount + 1
-                print("  OK")
-            else
-                failCount = failCount + 1
-                local reason = ok and "pull returned false" or tostring(pullResult)
-                printError("  Failed: " .. reason)
-            end
-        end
-
-        print(string.format("\nUpdate complete. Success: %d  Failed: %d", okCount, failCount))
-        print("Rebooting to apply updates...")
-        sleep(0.75)
-        os.reboot()
-    end
-
     redraw()
 
     -- Main Event Handler Loop
@@ -1764,7 +1713,11 @@ function tlib.showUI()
                         redraw()
                     end
                 elseif key == keys.u then
-                    runUpdates()
+                    tlib.runUpdates({
+                        parent = parent,
+                        restoreTerm = dashboardWin,
+                        pauseAfterFailure = true
+                    })
                     redraw()
                 elseif key == keys.t then
                     mode = "terminal"
@@ -1826,6 +1779,80 @@ function tlib.showUI()
     parent.setCursorPos(1, 1)
 end
 
+function tlib.runUpdates(options)
+    local opts = options or {}
+    local parent = opts.parent or (term and term.current and term.current())
+    if parent and term and term.redirect then
+        term.redirect(parent)
+        parent.clear()
+        parent.setCursorPos(1, 1)
+    end
+
+    print("Running update sequence...\n")
+
+    local sh = shell or _G.shell
+    if not sh then
+        printError("Shell is unavailable. Cannot run pull updates.")
+        if opts.pauseAfterFailure then
+            print("\nPress any key to continue...")
+            os.pullEvent("key")
+        end
+        if opts.restoreTerm and term and term.redirect then
+            term.redirect(opts.restoreTerm)
+        end
+        return false, "shell unavailable"
+    end
+
+    local targets = {}
+
+    for i = 1, #dependencies do
+        table.insert(targets, dependencies[i])
+    end
+
+    for i = 1, #programs do
+        table.insert(targets, programs[i])
+    end
+
+    local okCount = 0
+    local failCount = 0
+
+    for i = 1, #targets do
+        local target = targets[i]
+        print(string.format("[%d/%d] pull %s", i, #targets, target))
+        local ok, pullResult = pcall(function()
+            return sh.run("pull", target)
+        end)
+
+        if ok and pullResult then
+            okCount = okCount + 1
+            print("  OK")
+        else
+            failCount = failCount + 1
+            local reason = ok and "pull returned false" or tostring(pullResult)
+            printError("  Failed: " .. reason)
+        end
+    end
+
+    print(string.format("\nUpdate complete. Success: %d  Failed: %d", okCount, failCount))
+
+    if failCount > 0 then
+        print("Update finished with failures. Reboot skipped.")
+        if opts.pauseAfterFailure then
+            print("Press any key to continue...")
+            os.pullEvent("key")
+        end
+        if opts.restoreTerm and term and term.redirect then
+            term.redirect(opts.restoreTerm)
+        end
+        return false, string.format("%d targets failed", failCount)
+    end
+
+    print("Rebooting to apply updates...")
+    sleep(0.75)
+    os.reboot()
+    return true
+end
+
 -- =============================================================================
 -- CLI Entry Point
 -- =============================================================================
@@ -1867,6 +1894,11 @@ end]]
         print("startup.lua installed. tlib will run automatically on next boot.")
     else
         printError("Failed to write startup.lua.")
+    end
+elseif args[1] == "update" or args[1] == "-u" then
+    local ok, err = tlib.runUpdates({ pauseAfterFailure = false })
+    if not ok then
+        printError("Update command failed: " .. tostring(err))
     end
 end
 

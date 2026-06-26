@@ -1196,7 +1196,12 @@ function nlib.cli(args)
 end
 
 local args = { ... }
-if #args > 0 then
+if #args == 0 then
+    -- Direct invocation with no args should run default CLI behavior (mailbox server).
+    nlib.cli(args)
+elseif tostring(args[1]) ~= "nlib" then
+    -- When loaded via require(), some environments pass the module name as arg[1].
+    -- Skip CLI auto-execution in that case to avoid spurious "Unknown command: nlib".
     nlib.cli(args)
 end
 
