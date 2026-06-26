@@ -1619,9 +1619,9 @@ function tlib.showUI()
         end
 
         print(string.format("\nUpdate complete. Success: %d  Failed: %d", okCount, failCount))
-        print("Press any key to return to Control...")
-        os.pullEvent("key")
-        term.redirect(dashboardWin)
+        print("Rebooting to apply updates...")
+        sleep(0.75)
+        os.reboot()
     end
 
     redraw()
