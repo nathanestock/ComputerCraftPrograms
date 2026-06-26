@@ -1534,6 +1534,9 @@ function tlib.pingMailbox(mailboxServerID)
         end
 
         if reply.ok and reply.type == "pong" then
+            if reply.server_id == nil then
+                reply.server_id = sender
+            end
             return true, reply
         end
 
