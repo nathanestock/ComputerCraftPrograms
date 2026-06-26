@@ -407,11 +407,19 @@ local function runOptionalIntegrationTests()
 
                 if sendOk then
                     if type(sendReply) == "table" and type(sendReply.message_id) == "string" then
-                        local mode = sendReply.queued and "queued" or (sendReply.ack_pending and "awaiting_ack" or "accepted")
-                        record("PASS", "INT-06", "sendStatusViaMailbox accepted message_id=" .. tostring(sendReply.message_id) ..
-                            " mode=" .. tostring(mode))
+                        local serverAcked = (sendReply.queued == true) or (sendReply.ack_pending == true)
+                        if serverAcked then
+                            local mode = sendReply.queued and "queued" or "awaiting_ack"
+                            record("PASS", "INT-06",
+                                "Mailbox server acknowledged sendStatusViaMailbox message_id=" ..
+                                tostring(sendReply.message_id) .. " mode=" .. tostring(mode))
+                        else
+                            markWarn("INT-06",
+                                "Mailbox reply missing acknowledgement flags for message_id=" ..
+                                tostring(sendReply.message_id))
+                        end
                     else
-                        record("PASS", "INT-06", "sendStatusViaMailbox completed")
+                        markWarn("INT-06", "sendStatusViaMailbox reply missing message_id")
                     end
                 else
                     markWarn("INT-06", "sendStatusViaMailbox failed: " .. tostring(sendReply))
