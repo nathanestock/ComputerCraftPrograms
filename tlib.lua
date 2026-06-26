@@ -1257,10 +1257,6 @@ function tlib.runMailboxServer()
     return nlib.runMailboxServer()
 end
 
-function tlib.installMailbox()
-    return nlib.installServerStartup()
-end
-
 -- =============================================================================
 -- Initialize Method (Respects Single-Loader Lock & Calibrates GPS)
 -- =============================================================================
@@ -1837,13 +1833,6 @@ end]]
         print("startup.lua installed. tlib will run automatically on next boot.")
     else
         printError("Failed to write startup.lua.")
-    end
-elseif args[1] == "install_mailbox" or args[1] == "-im" or args[1] == "install_server" or args[1] == "-is" then
-    local ok, msg = tlib.installMailbox()
-    if ok then
-        print(tostring(msg or "Mailbox startup installed."))
-    else
-        printError("Failed to install mailbox startup: " .. tostring(msg))
     end
 end
 
