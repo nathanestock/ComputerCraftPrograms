@@ -116,6 +116,7 @@ local REFUEL_SIDE_MAP = {
 
 local refuelStrategies = {}
 local unpackFn = table.unpack or unpack
+local nlib = nil
 
 local function cloneTable(value)
     if type(value) ~= "table" then
@@ -1029,17 +1030,41 @@ local function runRednetTransaction(transactionFunc)
 
     local wasOpen = rednet.isOpen(side)
     if not wasOpen then
-        rednet.open(side)
+        if nlib and type(nlib.open) == "function" then
+            local openCallOk, opened, openErr = pcall(nlib.open, side)
+            if not openCallOk then
+                if didSwap then
+                    unequipModem(side, swappedSlot)
+                end
+                return false, opened
+            end
+            if not opened then
+                if didSwap then
+                    unequipModem(side, swappedSlot)
+                end
+                return false, openErr
+            end
+        else
+            rednet.open(side)
+        end
     end
 
     local txResults = { pcall(transactionFunc, side) }
     local ok = txResults[1]
 
     if didSwap then
-        rednet.close(side)
+        if nlib and type(nlib.close) == "function" then
+            pcall(nlib.close, side)
+        else
+            rednet.close(side)
+        end
         unequipModem(side, swappedSlot)
     elseif not wasOpen then
-        rednet.close(side)
+        if nlib and type(nlib.close) == "function" then
+            pcall(nlib.close, side)
+        else
+            rednet.close(side)
+        end
     end
 
     if not ok then
@@ -1215,7 +1240,7 @@ end
 -- Rednet Status Communications & Mailbox Client
 -- =============================================================================
 local requireNlibOk, nlibOrErr = pcall(require, "nlib")
-local nlib = requireNlibOk and nlibOrErr or nil
+nlib = requireNlibOk and nlibOrErr or nil
 local reportNlibIssue = rawget(_G, "printError") or print
 
 local function bindNlibMethod(methodName)
