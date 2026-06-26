@@ -24,6 +24,8 @@ local MAILBOX_ACK_TIMEOUT_SECONDS = 5
 
 local customTransactionRunner = nil
 local statusPayloadProvider = nil
+local activeMailboxServerID = nil
+local pendingMailboxMessages = {}
 
 local function currentComputerID()
     if type(getComputerIDFn) == "function" then
@@ -119,7 +121,7 @@ local function nextMailboxMessageID(store)
         tostring(store.sequence))
 end
 
-local function buildMailboxEntry(store, senderID, targetID, payload, ackTimeout)
+local function buildMailboxEntry(store, senderID, targetID, payload, ackTimeout, protocol)
     local timeout = tonumber(ackTimeout) or MAILBOX_ACK_TIMEOUT_SECONDS
     if timeout < 1 then
         timeout = MAILBOX_ACK_TIMEOUT_SECONDS
@@ -134,7 +136,8 @@ local function buildMailboxEntry(store, senderID, targetID, payload, ackTimeout)
         is_error = payload and payload.is_error or false,
         ts = mailboxNowSeconds(),
         ack_timeout_s = timeout,
-        expires_at = nil
+        expires_at = nil,
+        protocol = type(protocol) == "string" and protocol or STATUS_PROTOCOL
     }
 end
 
@@ -413,6 +416,83 @@ local function queuePayloadWithMailboxServer(targetID, payload, mailboxServerID,
     end)
 end
 
+local function relayMessageViaMailbox(targetID, message, protocol)
+    local request = {
+        type = "relay_message",
+        target_id = targetID,
+        payload = message,
+        protocol = protocol or STATUS_PROTOCOL,
+        try_direct = true,
+        ack_timeout_s = MAILBOX_ACK_TIMEOUT_SECONDS
+    }
+
+    return runTransaction(function(side)
+        rednet.send(activeMailboxServerID, request, MAILBOX_PROTOCOL)
+        local sender, reply = rednet.receive(MAILBOX_PROTOCOL, 2.0)
+        if not sender then
+            return false, "Mailbox server did not respond"
+        end
+        if type(reply) ~= "table" then
+            return false, "Mailbox server response was invalid"
+        end
+        if reply.ok then
+            return true, reply
+        end
+        return false, tostring(reply.error or "Relay request rejected")
+    end)
+end
+
+local function relayBroadcastViaMailbox(message, protocol)
+    local request = {
+        type = "relay_broadcast",
+        payload = message,
+        protocol = protocol or STATUS_PROTOCOL
+    }
+
+    return runTransaction(function(side)
+        rednet.send(activeMailboxServerID, request, MAILBOX_PROTOCOL)
+        local sender, reply = rednet.receive(MAILBOX_PROTOCOL, 2.0)
+        if not sender then
+            return false, "Mailbox server did not respond"
+        end
+        if type(reply) ~= "table" then
+            return false, "Mailbox server response was invalid"
+        end
+        if reply.ok then
+            return true, reply
+        end
+        return false, tostring(reply.error or "Relay broadcast rejected")
+    end)
+end
+
+local function fetchAndCacheMailboxMessages()
+    local fetchOk, messages = runTransaction(function(side)
+        local query = {
+            type = "fetch_mailbox",
+            turtle_id = currentComputerID()
+        }
+        rednet.send(activeMailboxServerID, query, MAILBOX_PROTOCOL)
+        local sender, reply = rednet.receive(MAILBOX_PROTOCOL, 2.0)
+        if sender and type(reply) == "table" and (reply.type == "mailbox_messages" or reply.messages) then
+            return reply.messages
+        end
+        return {}
+    end)
+
+    if fetchOk and type(messages) == "table" then
+        for i = 1, #messages do
+            local msg = messages[i]
+            if type(msg) == "table" then
+                if type(msg.message_id) == "string" then
+                    local ackTargetID = tonumber(msg.target) or currentComputerID()
+                    nlib.ackMailboxMessage(msg.message_id, activeMailboxServerID, ackTargetID)
+                end
+                pendingMailboxMessages[#pendingMailboxMessages + 1] = msg
+            end
+        end
+    end
+end
+
 function nlib.setTransactionRunner(runner)
     if runner ~= nil and type(runner) ~= "function" then
         return false, "runner must be a function or nil"
@@ -427,6 +507,36 @@ function nlib.setStatusProvider(provider)
     end
     statusPayloadProvider = provider
     return true
+end
+
+function nlib.setActiveMailboxServer(serverID)
+    if serverID ~= nil then
+        local n = tonumber(serverID)
+        if not n then
+            return false, "serverID must be a number or nil"
+        end
+        serverID = n
+    end
+    activeMailboxServerID = serverID
+    pendingMailboxMessages = {}
+    return true
+end
+
+function nlib.getActiveMailboxServer()
+    return activeMailboxServerID
+end
+
+function nlib.discoverMailboxServer()
+    local ok, result = nlib.pingMailbox(nil)
+    if ok and type(result) == "table" and result.server_id then
+        local serverID = tonumber(result.server_id)
+        if serverID then
+            activeMailboxServerID = serverID
+            pendingMailboxMessages = {}
+            return true, serverID
+        end
+    end
+    return false, "No mailbox server found"
 end
 
 function nlib.open(side)
@@ -461,6 +571,12 @@ function nlib.close(side)
 end
 
 function nlib.broadcast(message, protocol)
+    if activeMailboxServerID then
+        local ok, ret = relayBroadcastViaMailbox(message, protocol)
+        if ok then
+            return true, ret
+        end
+    end
     return runTransaction(function(side)
         rednet.broadcast(message, protocol)
         return true
@@ -468,6 +584,12 @@ function nlib.broadcast(message, protocol)
 end
 
 function nlib.send(targetID, message, protocol)
+    if activeMailboxServerID then
+        local ok, ret = relayMessageViaMailbox(targetID, message, protocol)
+        if ok then
+            return true, ret
+        end
+    end
     return runTransaction(function(side)
         rednet.send(targetID, message, protocol)
         return true
@@ -475,6 +597,25 @@ function nlib.send(targetID, message, protocol)
 end
 
 function nlib.receive(protocolFilter, timeout)
+    if activeMailboxServerID then
+        if #pendingMailboxMessages == 0 then
+            fetchAndCacheMailboxMessages()
+        end
+        for i = 1, #pendingMailboxMessages do
+            local msg = pendingMailboxMessages[i]
+            if type(msg) == "table" then
+                local msgProtocol = msg.protocol
+                if not protocolFilter or msgProtocol == protocolFilter then
+                    table.remove(pendingMailboxMessages, i)
+                    return true, {
+                        sender_id = tonumber(msg.from),
+                        payload = msg.payload,
+                        protocol = msgProtocol
+                    }
+                end
+            end
+        end
+    end
     return runTransaction(function(side)
         local senderID, payload, proto = rednet.receive(protocolFilter, timeout)
         return {
@@ -975,6 +1116,66 @@ function nlib.runMailboxServer()
                     server_id = currentComputerID()
                 }, MAILBOX_PROTOCOL)
                 addLog(serverState, "Ping from " .. tostring(senderID))
+            elseif request.type == "relay_message" then
+                local targetID = tonumber(request.target_id)
+                local payload = request.payload
+                local protocol = type(request.protocol) == "string" and request.protocol or STATUS_PROTOCOL
+
+                if not targetID or payload == nil then
+                    rednet.send(senderID, { ok = false, error = "relay_message requires target_id and payload" },
+                        MAILBOX_PROTOCOL)
+                    addLog(serverState, "Bad relay_message from " .. tostring(senderID))
+                else
+                    local entry = buildMailboxEntry(store, senderID, targetID, payload, request.ack_timeout_s, protocol)
+                    local delivered = false
+                    if request.try_direct ~= false then
+                        local sentOk, sentRet = pcall(rednet.send, targetID, payload, protocol)
+                        delivered = (sentOk and sentRet == true)
+                    end
+
+                    if delivered then
+                        moveToInflight(store, targetID, entry)
+                        addLog(serverState,
+                            string.format("Relay direct %s -> %s (%s)", tostring(senderID), tostring(targetID),
+                                tostring(entry.message_id)))
+                    else
+                        appendMailboxMessage(store, targetID, entry)
+                        serverState.queuedCount = serverState.queuedCount + 1
+                        addLog(serverState,
+                            string.format("Relay queued for %s (%d pending)", tostring(targetID),
+                                countQueuedForTarget(store, targetID)))
+                    end
+
+                    local saved, saveErr = saveMailboxStore(store)
+                    if not saved then
+                        rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
+                            MAILBOX_PROTOCOL)
+                        addLog(serverState, "Relay persist failed for target " .. tostring(targetID))
+                    else
+                        rednet.send(senderID, {
+                            ok = true,
+                            delivered = delivered,
+                            queued = not delivered,
+                            message_id = entry.message_id,
+                            queued_count = countQueuedForTarget(store, targetID),
+                            inflight_count = countInflightForTarget(store, targetID)
+                        }, MAILBOX_PROTOCOL)
+                    end
+                end
+            elseif request.type == "relay_broadcast" then
+                local payload = request.payload
+                local protocol = type(request.protocol) == "string" and request.protocol or STATUS_PROTOCOL
+
+                if payload == nil then
+                    rednet.send(senderID, { ok = false, error = "relay_broadcast requires payload" }, MAILBOX_PROTOCOL)
+                    addLog(serverState, "Bad relay_broadcast from " .. tostring(senderID))
+                else
+                    rednet.broadcast(payload, protocol)
+                    serverState.deliveredCount = serverState.deliveredCount + 1
+                    addLog(serverState,
+                        string.format("Broadcast relayed from %s (protocol=%s)", tostring(senderID), tostring(protocol)))
+                    rednet.send(senderID, { ok = true, type = "broadcast_relayed" }, MAILBOX_PROTOCOL)
+                end
             else
                 rednet.send(senderID, {
                     ok = false,
@@ -1053,6 +1254,7 @@ local function printUsage()
     print("  nlib fetch [mailboxServerId]")
     print("  nlib fetch_noack [mailboxServerId]")
     print("  nlib ack <messageId> [serverId] [targetId]")
+    print("  nlib discover                 (find and set active mailbox server)")
 end
 
 function nlib.cli(args)
@@ -1187,6 +1389,16 @@ function nlib.cli(args)
             print("ACK accepted for message_id=" .. tostring(messageID) .. ".")
         else
             printError("ACK failed: " .. tostring(reply))
+        end
+        return
+    end
+
+    if cmd == "discover" then
+        local ok, serverID = nlib.discoverMailboxServer()
+        if ok then
+            print("Active mailbox server set to ID " .. tostring(serverID) .. ".")
+        else
+            printError("Discover failed: " .. tostring(serverID))
         end
         return
     end
