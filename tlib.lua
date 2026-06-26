@@ -1505,10 +1505,20 @@ local function drawDashboard(win, w, h, programs, selectedIndex)
     win.setCursorPos(1, 11)
     win.write(string.rep("-", w))
 
-    -- Footer
-    win.setCursorPos(1, h)
+    -- Footer (two-row action layout)
+    local firstFooterRow = h - 1
+
     win.setTextColor(colors.yellow)
-    win.write("[Enter] Run  [U] Update  [T] Term  [Q] Quit")
+    win.setCursorPos(1, firstFooterRow)
+    win.clearLine()
+    local runAction = "[Enter] Run Selected Program"
+    local runX = math.max(1, math.floor((w - #runAction) / 2) + 1)
+    win.setCursorPos(runX, firstFooterRow)
+    win.write(runAction)
+
+    win.setCursorPos(1, h)
+    win.clearLine()
+    win.write("[U] Update  [T] Terminal  [Q] Quit")
 
     win.setVisible(true) -- Show after drawing is finished
 end
