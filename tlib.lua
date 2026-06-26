@@ -41,7 +41,6 @@ local REFUEL_SIDE_MAP = {
         drop = turtle.drop,
         dig = turtle.dig,
         sideName = "front",
-        entangloporterSide = "FRONT"
     },
     up = {
         place = turtle.placeUp,
@@ -49,7 +48,6 @@ local REFUEL_SIDE_MAP = {
         drop = turtle.dropUp,
         dig = turtle.digUp,
         sideName = "top",
-        entangloporterSide = "BOTTOM"
     },
     down = {
         place = turtle.placeDown,
@@ -57,7 +55,6 @@ local REFUEL_SIDE_MAP = {
         drop = turtle.dropDown,
         dig = turtle.digDown,
         sideName = "bottom",
-        entangloporterSide = "TOP"
     }
 }
 
@@ -182,7 +179,7 @@ local function runInventoryRefuelStrategy(options)
     return false, "No consumable fuel found in inventory"
 end
 
-local function configureEntangloporterForFuel(peripheralObj, frequency, sideKey)
+local function configureEntangloporterForFuel(peripheralObj, frequency)
     if type(peripheralObj) ~= "table" then
         return false, "Invalid entangloporter peripheral"
     end
@@ -191,8 +188,7 @@ local function configureEntangloporterForFuel(peripheralObj, frequency, sideKey)
         return false, "Entangloporter missing setMode()"
     end
 
-    local sideConfig = REFUEL_SIDE_MAP[sideKey]
-    local ok, err = pcall(peripheralObj.setMode, "ITEM", sideConfig.entangloporterSide, "INPUT_OUTPUT")
+    local ok, err = pcall(peripheralObj.setMode, "ITEM", "BACK", "INPUT_OUTPUT")
     if not ok then
         return false, "setMode ITEM INPUT_OUTPUT failed: " .. tostring(err)
     end
@@ -315,7 +311,7 @@ local function runEntangloporterRefuelStrategy(options)
         return false, "Failed to wrap entangloporter peripheral on " .. ops.sideName
     end
 
-    local configOk, configErr = configureEntangloporterForFuel(peripheralObj, cfg.entangloporterFrequency, cfg.side)
+    local configOk, configErr = configureEntangloporterForFuel(peripheralObj, cfg.entangloporterFrequency)
     if not configOk then
         cleanup()
         return false, configErr
