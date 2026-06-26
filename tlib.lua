@@ -1202,66 +1202,66 @@ end
 -- =============================================================================
 -- Rednet Status Communications & Mailbox Client
 -- =============================================================================
-local nlib = require("nlib")
+local requireNlibOk, nlibOrErr = pcall(require, "nlib")
+local nlib = requireNlibOk and nlibOrErr or nil
+local reportNlibIssue = rawget(_G, "printError") or print
 
-nlib.setTransactionRunner(runRednetTransaction)
-nlib.setStatusProvider(function(statusText, isError, extra)
-    local payload = {
-        id = os.getComputerID(),
-        label = os.getComputerLabel() or "Turtle",
-        x = state.x,
-        y = state.y,
-        z = state.z,
-        facing = state.facing,
-        fuel = turtle.getFuelLevel(),
-        status = statusText,
-        is_error = isError or false
-    }
-
-    if type(extra) == "table" then
-        for k, v in pairs(extra) do
-            payload[k] = v
+local function bindNlibMethod(methodName)
+    if nlib and type(nlib[methodName]) == "function" then
+        tlib[methodName] = function(...)
+            return nlib[methodName](...)
         end
+        return
     end
 
-    return payload
-end)
-
-function tlib.broadcastStatus(statusText, isError)
-    return nlib.broadcastStatus(statusText, isError)
+    tlib[methodName] = function()
+        if nlib then
+            return false, "nlib method unavailable: " .. methodName
+        end
+        return false, "nlib unavailable: " .. tostring(nlibOrErr)
+    end
 end
 
-function tlib.sendStatus(targetID, statusText, isError, mailboxServerID)
-    return nlib.sendStatus(targetID, statusText, isError, mailboxServerID)
+if nlib then
+    if type(nlib.setTransactionRunner) == "function" then
+        nlib.setTransactionRunner(runRednetTransaction)
+    end
+
+    if type(nlib.setStatusProvider) == "function" then
+        nlib.setStatusProvider(function(statusText, isError, extra)
+            local payload = {
+                id = os.getComputerID(),
+                label = os.getComputerLabel() or "Turtle",
+                x = state.x,
+                y = state.y,
+                z = state.z,
+                facing = state.facing,
+                fuel = turtle.getFuelLevel(),
+                status = statusText,
+                is_error = isError or false
+            }
+
+            if type(extra) == "table" then
+                for k, v in pairs(extra) do
+                    payload[k] = v
+                end
+            end
+
+            return payload
+        end)
+    end
+else
+    reportNlibIssue("nlib not installed; status and mailbox features are disabled.")
 end
 
-function tlib.queueStatus(targetID, statusText, isError, mailboxServerID)
-    return nlib.queueStatus(targetID, statusText, isError, mailboxServerID)
-end
-
-function tlib.sendStatusViaMailbox(targetID, statusText, isError, mailboxServerID)
-    return nlib.sendStatusViaMailbox(targetID, statusText, isError, mailboxServerID)
-end
-
-function tlib.pingMailbox(mailboxServerID)
-    return nlib.pingMailbox(mailboxServerID)
-end
-
-function tlib.ackMailboxMessage(messageID, mailboxServerID, targetID)
-    return nlib.ackMailboxMessage(messageID, mailboxServerID, targetID)
-end
-
-function tlib.listenStatus(options)
-    return nlib.listenStatus(options)
-end
-
-function tlib.checkOfflineMessages(mailboxServerID, options)
-    return nlib.checkOfflineMessages(mailboxServerID, options)
-end
-
-function tlib.runMailboxServer()
-    return nlib.runMailboxServer()
-end
+bindNlibMethod("broadcastStatus")
+bindNlibMethod("sendStatus")
+bindNlibMethod("queueStatus")
+bindNlibMethod("sendStatusViaMailbox")
+bindNlibMethod("listenStatus")
+bindNlibMethod("checkOfflineMessages")
+bindNlibMethod("pingMailbox")
+bindNlibMethod("ackMailboxMessage")
 
 -- =============================================================================
 -- Initialize Method (Respects Single-Loader Lock & Calibrates GPS)
