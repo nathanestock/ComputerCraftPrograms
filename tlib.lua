@@ -115,6 +115,7 @@ local REFUEL_SIDE_MAP = {
 }
 
 local refuelStrategies = {}
+local unpackFn = table.unpack or unpack
 
 local function cloneTable(value)
     if type(value) ~= "table" then
@@ -1017,6 +1018,10 @@ local function unequipModem(side, swappedSlot)
 end
 
 local function runRednetTransaction(transactionFunc)
+    if type(transactionFunc) ~= "function" then
+        return false, "transactionFunc must be a function"
+    end
+
     local success, side, didSwap, swappedSlot = equipModem()
     if not success then
         return false, side
@@ -1027,7 +1032,8 @@ local function runRednetTransaction(transactionFunc)
         rednet.open(side)
     end
 
-    local ok, ret = pcall(transactionFunc, side)
+    local txResults = { pcall(transactionFunc, side) }
+    local ok = txResults[1]
 
     if didSwap then
         rednet.close(side)
@@ -1037,10 +1043,15 @@ local function runRednetTransaction(transactionFunc)
     end
 
     if not ok then
-        error(ret)
+        error(txResults[2])
     end
 
-    return true, ret
+    return true, unpackFn(txResults, 2)
+end
+
+-- Allows program code to run network operations with guaranteed modem handling.
+function tlib.runRednetTransaction(transactionFunc)
+    return runRednetTransaction(transactionFunc)
 end
 
 -- =============================================================================

@@ -384,7 +384,13 @@ local function sendWorkerMessage(managerID, managerProtocol, messageType, body)
         body = body or {}
     }
 
-    return nlib.send(managerID, payload, managerProtocol)
+    local txOk, sendOk, sendErr = tlib.runRednetTransaction(function()
+        return nlib.send(managerID, payload, managerProtocol)
+    end)
+    if not txOk then
+        return false, sendOk
+    end
+    return sendOk, sendErr
 end
 
 local function resolveManagerSelection()
@@ -399,23 +405,36 @@ local function resolveManagerSelection()
         return managerLabel, managerProtocol
     end
 
-    local ok, err = nlib.open()
-    if not ok then
-        error("resolveManagerSelection: failed to open rednet modem: " .. tostring(err))
-    end
-
     print("No manager configured. Discovering digital mining managers...")
-    nlib.broadcast({
-        messageType = "discover_manager",
-        workerId = computerID(),
-        workerLabel = computerLabel(),
-        sentAt = nowSeconds()
-    }, DISCOVERY_PROTOCOL)
+    local broadcastTxOk, broadcastOk, broadcastErr = tlib.runRednetTransaction(function()
+        local ok, err = nlib.open()
+        if not ok then
+            return false, err
+        end
+
+        return nlib.broadcast({
+            messageType = "discover_manager",
+            workerId = computerID(),
+            workerLabel = computerLabel(),
+            sentAt = nowSeconds()
+        }, DISCOVERY_PROTOCOL)
+    end)
+    if not broadcastTxOk then
+        error("resolveManagerSelection: broadcast transaction failed: " .. tostring(broadcastOk))
+    end
+    if not broadcastOk then
+        error("resolveManagerSelection: discovery broadcast failed: " .. tostring(broadcastErr))
+    end
 
     local candidates = {}
     local started = nowSeconds()
     while nowSeconds() - started < 3 do
-        local got, resp = nlib.receive(DISCOVERY_PROTOCOL, 0.75)
+        local txOk, got, resp = tlib.runRednetTransaction(function()
+            return nlib.receive(DISCOVERY_PROTOCOL, 0.75)
+        end)
+        if not txOk then
+            error("resolveManagerSelection: discovery receive transaction failed: " .. tostring(got))
+        end
         if got and resp and type(resp.payload) == "table" then
             local payload = resp.payload
             if payload.messageType == "manager_announce" and type(payload.managerLabel) == "string" then
@@ -464,7 +483,12 @@ end
 
 local function requestTaskFromManager()
     local managerLabel, managerProtocol = resolveManagerSelection()
-    local managerID = nlib.lookup(managerProtocol, managerLabel)
+    local lookupTxOk, managerID = tlib.runRednetTransaction(function()
+        return nlib.lookup(managerProtocol, managerLabel)
+    end)
+    if not lookupTxOk then
+        error("requestTaskFromManager: manager lookup transaction failed: " .. tostring(managerID))
+    end
     if not managerID then
         error("requestTaskFromManager: manager host unavailable for protocol " .. managerProtocol)
     end
@@ -482,7 +506,12 @@ local function requestTaskFromManager()
     end
 
     while true do
-        local recvOk, recvRet = nlib.receive(managerProtocol, 5)
+        local recvTxOk, recvOk, recvRet = tlib.runRednetTransaction(function()
+            return nlib.receive(managerProtocol, 5)
+        end)
+        if not recvTxOk then
+            error("requestTaskFromManager: receive transaction failed: " .. tostring(recvOk))
+        end
         if not recvOk then
             error("requestTaskFromManager: receive failed: " .. tostring(recvRet))
         end
@@ -959,7 +988,12 @@ local function run()
     if p.phase == "finalize" then
         p.completed = true
         local managerLabel, managerProtocol = resolveManagerSelection()
-        local managerID = nlib.lookup(managerProtocol, managerLabel)
+        local lookupTxOk, managerID = tlib.runRednetTransaction(function()
+            return nlib.lookup(managerProtocol, managerLabel)
+        end)
+        if not lookupTxOk then
+            error("finalize: manager lookup transaction failed: " .. tostring(managerID))
+        end
         if managerID then
             reportTaskComplete(managerID, managerProtocol)
         end
