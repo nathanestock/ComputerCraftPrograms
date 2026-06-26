@@ -1135,6 +1135,84 @@ end
 -- Rednet Status Communications & Mailbox Client
 -- =============================================================================
 
+local MAILBOX_STORE_FILE = "turtle_mailbox_store.json"
+
+local function loadMailboxStore()
+    if not fs.exists(MAILBOX_STORE_FILE) then
+        return {}
+    end
+
+    local f = fs.open(MAILBOX_STORE_FILE, "r")
+    if not f then
+        return {}
+    end
+
+    local raw = f.readAll()
+    f.close()
+
+    if not raw or raw == "" then
+        return {}
+    end
+
+    local parsed = textutils.unserialize(raw)
+    if type(parsed) ~= "table" then
+        return {}
+    end
+
+    return parsed
+end
+
+local function saveMailboxStore(store)
+    local f = fs.open(MAILBOX_STORE_FILE, "w")
+    if not f then
+        return false, "Failed to open mailbox store for writing"
+    end
+
+    f.write(textutils.serialize(store or {}))
+    f.close()
+    return true
+end
+
+local function queuePayloadWithMailboxServer(targetID, payload, mailboxServerID, tryDirect)
+    local request = {
+        type = "store_status",
+        target_id = targetID,
+        payload = payload,
+        try_direct = (tryDirect ~= false)
+    }
+
+    return runRednetTransaction(function(side)
+        if mailboxServerID then
+            rednet.send(mailboxServerID, request, "turtle_mailbox")
+        else
+            rednet.broadcast(request, "turtle_mailbox")
+        end
+
+        local sender, reply = rednet.receive("turtle_mailbox", 2.0)
+        if not sender then
+            return false, "Mailbox server did not respond"
+        end
+
+        if type(reply) ~= "table" then
+            return false, "Mailbox server response was invalid"
+        end
+
+        if reply.ok then
+            return true, reply
+        end
+
+        return false, tostring(reply.error or "Mailbox server rejected request")
+    end)
+end
+
+local function appendMailboxMessage(store, targetID, entry)
+    local key = tostring(targetID)
+    if type(store[key]) ~= "table" then
+        store[key] = {}
+    end
+    table.insert(store[key], entry)
+end
+
 local function createStatusPayload(statusText, isError)
     return {
         id = os.getComputerID(),
@@ -1157,11 +1235,56 @@ function tlib.broadcastStatus(statusText, isError)
     end)
 end
 
-function tlib.sendStatus(targetID, statusText, isError)
+function tlib.sendStatus(targetID, statusText, isError, mailboxServerID)
     local payload = createStatusPayload(statusText, isError)
+
+    if mailboxServerID then
+        return queuePayloadWithMailboxServer(targetID, payload, mailboxServerID, true)
+    end
+
     return runRednetTransaction(function(side)
         rednet.send(targetID, payload, "turtle_status")
         return true
+    end)
+end
+
+function tlib.queueStatus(targetID, statusText, isError, mailboxServerID)
+    local payload = createStatusPayload(statusText, isError)
+    return queuePayloadWithMailboxServer(targetID, payload, mailboxServerID, false)
+end
+
+function tlib.sendStatusViaMailbox(targetID, statusText, isError, mailboxServerID)
+    local payload = createStatusPayload(statusText, isError)
+    return queuePayloadWithMailboxServer(targetID, payload, mailboxServerID, true)
+end
+
+function tlib.pingMailbox(mailboxServerID)
+    local query = {
+        type = "ping",
+        sender_id = os.getComputerID()
+    }
+
+    return runRednetTransaction(function(side)
+        if mailboxServerID then
+            rednet.send(mailboxServerID, query, "turtle_mailbox")
+        else
+            rednet.broadcast(query, "turtle_mailbox")
+        end
+
+        local sender, reply = rednet.receive("turtle_mailbox", 2.0)
+        if not sender then
+            return false, "Mailbox server did not respond"
+        end
+
+        if type(reply) ~= "table" then
+            return false, "Mailbox server response was invalid"
+        end
+
+        if reply.ok and reply.type == "pong" then
+            return true, reply
+        end
+
+        return false, tostring(reply.error or "Mailbox ping failed")
     end)
 end
 
@@ -1178,14 +1301,129 @@ function tlib.checkOfflineMessages(mailboxServerID)
             rednet.broadcast(query, "turtle_mailbox")
         end
 
-        local sender, reply, protocol = rednet.receive("turtle_mailbox", 2.0)
-        if sender and type(reply) == "table" and reply.messages then
+        local sender, reply = rednet.receive("turtle_mailbox", 2.0)
+        if sender and type(reply) == "table" and (reply.type == "mailbox_messages" or reply.messages) then
             return reply.messages
         end
         return {}
     end)
 
     return success, messages
+end
+
+function tlib.runMailboxServer()
+    local modemOk, modemSide, didSwap, swappedSlot = equipModem()
+    if not modemOk then
+        return false, modemSide
+    end
+
+    local wasOpen = rednet.isOpen(modemSide)
+    if not wasOpen then
+        rednet.open(modemSide)
+    end
+
+    local store = loadMailboxStore()
+
+    print(string.format("Mailbox server online on ID %d (%s)", os.getComputerID(), modemSide))
+    print("Listening on protocol: turtle_mailbox")
+
+    local ok, runErr = pcall(function()
+        while true do
+            local senderID, request = rednet.receive("turtle_mailbox")
+            if type(request) ~= "table" then
+                rednet.send(senderID, { ok = false, error = "Invalid request payload" }, "turtle_mailbox")
+            elseif request.type == "store_status" then
+                local targetID = tonumber(request.target_id)
+                local payload = request.payload
+
+                if not targetID or type(payload) ~= "table" then
+                    rednet.send(senderID, { ok = false, error = "store_status requires target_id and payload" },
+                        "turtle_mailbox")
+                else
+                    local delivered = false
+                    if request.try_direct ~= false then
+                        local sentOk, sentRet = pcall(rednet.send, targetID, payload, "turtle_status")
+                        delivered = (sentOk and sentRet == true)
+                    end
+
+                    if not delivered then
+                        appendMailboxMessage(store, targetID, {
+                            from = senderID,
+                            target = targetID,
+                            payload = payload,
+                            message = payload.status,
+                            is_error = payload.is_error,
+                            ts = os.epoch and os.epoch("utc") or os.clock()
+                        })
+
+                        local saved, saveErr = saveMailboxStore(store)
+                        if not saved then
+                            rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
+                                "turtle_mailbox")
+                        else
+                            local queuedCount = #store[tostring(targetID)]
+                            rednet.send(senderID, {
+                                ok = true,
+                                delivered = false,
+                                queued = true,
+                                queued_count = queuedCount
+                            }, "turtle_mailbox")
+                        end
+                    else
+                        rednet.send(senderID, {
+                            ok = true,
+                            delivered = true,
+                            queued = false,
+                            queued_count = #(store[tostring(targetID)] or {})
+                        }, "turtle_mailbox")
+                    end
+                end
+            elseif request.type == "fetch_mailbox" then
+                local turtleID = tonumber(request.turtle_id or senderID)
+                local key = tostring(turtleID)
+                local messages = store[key] or {}
+
+                store[key] = {}
+                local saved, saveErr = saveMailboxStore(store)
+                if not saved then
+                    rednet.send(senderID, { ok = false, error = saveErr or "Failed to update mailbox" },
+                        "turtle_mailbox")
+                else
+                    rednet.send(senderID, {
+                        ok = true,
+                        type = "mailbox_messages",
+                        turtle_id = turtleID,
+                        messages = messages
+                    }, "turtle_mailbox")
+                end
+            elseif request.type == "ping" then
+                rednet.send(senderID, {
+                    ok = true,
+                    type = "pong",
+                    server_id = os.getComputerID()
+                }, "turtle_mailbox")
+            else
+                rednet.send(senderID, {
+                    ok = false,
+                    error = "Unknown request type: " .. tostring(request.type)
+                }, "turtle_mailbox")
+            end
+        end
+    end)
+
+    if not wasOpen then
+        rednet.close(modemSide)
+    end
+
+    if didSwap then
+        unequipModem(modemSide, swappedSlot)
+    end
+
+    if not ok then
+        return false, tostring(runErr)
+    end
+
+    return true
 end
 
 function tlib.installMailbox()

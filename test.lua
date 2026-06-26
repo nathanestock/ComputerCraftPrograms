@@ -386,6 +386,71 @@ local function runOptionalIntegrationTests()
     else
         markWarn("INT-03", "checkOfflineMessages unavailable/offline")
     end
+
+    local hasMailboxApi = hasFunction("pingMailbox") and hasFunction("sendStatusViaMailbox") and hasFunction("runMailboxServer")
+    assertTrue("INT-04", hasMailboxApi,
+        "Mailbox APIs are available (pingMailbox/sendStatusViaMailbox/runMailboxServer)",
+        "Mailbox APIs missing from tlib")
+
+    if hasMailboxApi then
+        local pingOk, pingReply = tlib.pingMailbox(nil)
+        if pingOk then
+            local replyType = type(pingReply)
+            local serverId = replyType == "table" and pingReply.server_id or nil
+            record("PASS", "INT-05", "pingMailbox succeeded; server_id=" .. tostring(serverId))
+
+            local computerIdFn = rawget(_G, "getComputerID")
+            if type(computerIdFn) == "function" then
+                local targetId = computerIdFn()
+                local testMessage = "tlib mailbox integration test @" .. tostring(nowStamp())
+                local sendOk, sendReply = tlib.sendStatusViaMailbox(targetId, testMessage, false, serverId)
+
+                if sendOk then
+                    local delivered = type(sendReply) == "table" and sendReply.delivered == true
+                    if delivered then
+                        record("PASS", "INT-06", "sendStatusViaMailbox relayed directly")
+                    else
+                        record("PASS", "INT-06", "sendStatusViaMailbox queued message")
+                    end
+                else
+                    markWarn("INT-06", "sendStatusViaMailbox failed: " .. tostring(sendReply))
+                end
+            else
+                markSkip("INT-06", "Skipped mailbox send test because getComputerID API is unavailable")
+            end
+
+            local fetchOk, fetched = tlib.checkOfflineMessages(serverId)
+            if fetchOk then
+                if type(fetched) == "table" then
+                    record("PASS", "INT-07", "Mailbox fetch succeeded with " .. tostring(#fetched) .. " message(s)")
+
+                    local first = fetched[1]
+                    if first and type(first) == "table" then
+                        local payload = first.payload or first.message
+                        local statusText = type(payload) == "table" and payload.status or nil
+                        if type(statusText) == "string" and statusText ~= "" then
+                            record("PASS", "INT-08", "Fetched mailbox message includes status payload")
+                        else
+                            markWarn("INT-08", "Fetched mailbox message did not include expected status payload")
+                        end
+                    else
+                        markSkip("INT-08", "No queued mailbox entry available to validate payload shape")
+                    end
+                else
+                    markWarn("INT-07", "Mailbox fetch result type invalid: " .. type(fetched))
+                    markSkip("INT-08", "Skipped payload shape check due to invalid fetch result")
+                end
+            else
+                markWarn("INT-07", "Mailbox fetch via server failed: " .. tostring(fetched))
+                markSkip("INT-08", "Skipped payload shape check because mailbox fetch failed")
+            end
+        else
+            markWarn("INT-05", "pingMailbox unavailable/offline: " .. tostring(pingReply))
+            markSkip("INT-06", "Skipped mailbox send test because mailbox server was unreachable")
+            markSkip("INT-07", "Skipped mailbox fetch test because mailbox server was unreachable")
+            markSkip("INT-08", "Skipped mailbox payload shape check because mailbox server was unreachable")
+        end
+    end
 end
 
 local function collectDetailedResults()

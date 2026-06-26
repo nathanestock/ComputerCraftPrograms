@@ -1,5 +1,5 @@
 -- tlib_mailbox.lua
--- CLI utility for turtle mailbox/status operations via tlib.
+-- Mailbox server + CLI utility for turtle status relay/queue operations.
 
 local ok, tlibOrErr = pcall(require, "tlib")
 if not ok then
@@ -8,6 +8,13 @@ if not ok then
 end
 
 local tlib = tlibOrErr
+
+local function runServerLoop()
+    local success, err = tlib.runMailboxServer()
+    if not success then
+        printError("Mailbox server exited: " .. tostring(err))
+    end
+end
 
 local function joinFrom(args, startIndex)
     local parts = {}
@@ -19,10 +26,15 @@ end
 
 local function printUsage()
     print("tlib_mailbox usage:")
+    print("  tlib_mailbox                 (run mailbox server)")
+    print("  tlib_mailbox server          (run mailbox server)")
+    print("  tlib_mailbox ping [serverId]")
     print("  tlib_mailbox broadcast <status text>")
     print("  tlib_mailbox broadcast_error <status text>")
-    print("  tlib_mailbox send <targetId> <status text>")
-    print("  tlib_mailbox send_error <targetId> <status text>")
+    print("  tlib_mailbox send <targetId> <status text> [serverId]")
+    print("  tlib_mailbox send_error <targetId> <status text> [serverId]")
+    print("  tlib_mailbox send_direct <targetId> <status text>")
+    print("  tlib_mailbox send_direct_error <targetId> <status text>")
     print("  tlib_mailbox fetch [mailboxServerId]")
 end
 
@@ -49,7 +61,23 @@ local args = { ... }
 local cmd = args[1]
 
 if not cmd then
-    printUsage()
+    runServerLoop()
+    return
+end
+
+if cmd == "server" then
+    runServerLoop()
+    return
+end
+
+if cmd == "ping" then
+    local mailboxServerID = tonumber(args[2])
+    local success, reply = tlib.pingMailbox(mailboxServerID)
+    if success then
+        print("Mailbox server reachable: " .. tostring(reply and reply.server_id or "unknown"))
+    else
+        printError("Ping failed: " .. tostring(reply))
+    end
     return
 end
 
@@ -92,18 +120,60 @@ if cmd == "send" or cmd == "send_error" then
         return
     end
 
-    local statusText = joinFrom(args, 3)
+    local mailboxServerID = nil
+    local messageEndIndex = #args
+    if #args >= 4 then
+        local maybeServer = tonumber(args[#args])
+        if maybeServer then
+            mailboxServerID = maybeServer
+            messageEndIndex = #args - 1
+        end
+    end
+
+    local parts = {}
+    for i = 3, messageEndIndex do
+        parts[#parts + 1] = tostring(args[i])
+    end
+    local statusText = table.concat(parts, " ")
+
     if statusText == "" then
         printError("Status text is required.")
         return
     end
 
     local isError = (cmd == "send_error")
-    local success, ret = tlib.sendStatus(targetId, statusText, isError)
+    local success, ret = tlib.sendStatusViaMailbox(targetId, statusText, isError, mailboxServerID)
     if success then
-        print("Status message sent to " .. tostring(targetId) .. ".")
+        if type(ret) == "table" and ret.delivered then
+            print("Status delivered directly to " .. tostring(targetId) .. ".")
+        else
+            print("Status queued for " .. tostring(targetId) .. ".")
+        end
     else
         printError("Send failed: " .. tostring(ret))
+    end
+    return
+end
+
+if cmd == "send_direct" or cmd == "send_direct_error" then
+    local targetId = tonumber(args[2])
+    if not targetId then
+        printError("targetId must be a number.")
+        return
+    end
+
+    local statusText = joinFrom(args, 3)
+    if statusText == "" then
+        printError("Status text is required.")
+        return
+    end
+
+    local isError = (cmd == "send_direct_error")
+    local success, ret = tlib.sendStatus(targetId, statusText, isError)
+    if success then
+        print("Direct status message sent to " .. tostring(targetId) .. ".")
+    else
+        printError("Direct send failed: " .. tostring(ret))
     end
     return
 end
