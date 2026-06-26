@@ -1,4 +1,5 @@
 local tlib = require("tlib")
+local nlib = require("nlib")
 local ccTurtle = rawget(_G, "turtle")
 local osSleep = os and rawget(os, "sleep")
 local ccSleep = rawget(_G, "sleep") or function(seconds)
@@ -149,6 +150,10 @@ end
 
 local function hasFunction(name)
     return type(tlib[name]) == "function"
+end
+
+local function hasNlibFunction(name)
+    return type(nlib[name]) == "function"
 end
 
 local function getResumeProgram()
@@ -366,11 +371,11 @@ local function runOptionalIntegrationTests()
 
     print("Running integration tests (GPS/Rednet)...")
 
-    local bOk, bErr = tlib.broadcastStatus("tlib self-test integration ping")
+    local bOk, bErr = nlib.broadcastStatus("nlib self-test integration ping")
     if bOk then
-        record("PASS", "INT-01", "broadcastStatus completed")
+        record("PASS", "INT-01", "nlib.broadcastStatus completed")
     else
-        markWarn("INT-01", "broadcastStatus unavailable/offline: " .. tostring(bErr))
+        markWarn("INT-01", "nlib.broadcastStatus unavailable/offline: " .. tostring(bErr))
     end
 
     local gpsSync = tlib.syncGPS()
@@ -380,29 +385,30 @@ local function runOptionalIntegrationTests()
         markWarn("INT-02", "syncGPS unavailable or no signal")
     end
 
-    local mOk, messages = tlib.checkOfflineMessages(nil)
+    local mOk, messages = nlib.checkOfflineMessages(nil)
     if mOk then
-        record("PASS", "INT-03", "checkOfflineMessages returned " .. tostring(#messages) .. " message(s)")
+        record("PASS", "INT-03", "nlib.checkOfflineMessages returned " .. tostring(#messages) .. " message(s)")
     else
-        markWarn("INT-03", "checkOfflineMessages unavailable/offline")
+        markWarn("INT-03", "nlib.checkOfflineMessages unavailable/offline")
     end
 
-    local hasMailboxApi = hasFunction("pingMailbox") and hasFunction("sendStatusViaMailbox") and hasFunction("runMailboxServer")
+    local hasMailboxApi = hasNlibFunction("pingMailbox") and hasNlibFunction("sendStatusViaMailbox") and
+        hasNlibFunction("runMailboxServer")
     assertTrue("INT-04", hasMailboxApi,
-        "Mailbox APIs are available (pingMailbox/sendStatusViaMailbox/runMailboxServer)",
-        "Mailbox APIs missing from tlib")
+        "nlib mailbox APIs are available (pingMailbox/sendStatusViaMailbox/runMailboxServer)",
+        "Mailbox APIs missing from nlib")
 
     if hasMailboxApi then
-        local pingOk, pingReply = tlib.pingMailbox(nil)
+        local pingOk, pingReply = nlib.pingMailbox(nil)
         if pingOk then
             local replyType = type(pingReply)
             local serverId = replyType == "table" and pingReply.server_id or nil
-            record("PASS", "INT-05", "pingMailbox succeeded; server_id=" .. tostring(serverId))
+            record("PASS", "INT-05", "nlib.pingMailbox succeeded; server_id=" .. tostring(serverId))
 
             local targetId = tonumber(serverId)
             if targetId then
-                local testMessage = "tlib mailbox integration test @" .. tostring(nowStamp())
-                local sendOk, sendReply = tlib.sendStatusViaMailbox(targetId, testMessage, false, serverId)
+                local testMessage = "nlib mailbox integration test @" .. tostring(nowStamp())
+                local sendOk, sendReply = nlib.sendStatusViaMailbox(targetId, testMessage, false, serverId)
 
                 if sendOk then
                     if type(sendReply) == "table" and type(sendReply.message_id) == "string" then
@@ -418,16 +424,16 @@ local function runOptionalIntegrationTests()
                                 tostring(sendReply.message_id))
                         end
                     else
-                        markWarn("INT-06", "sendStatusViaMailbox reply missing message_id")
+                        markWarn("INT-06", "nlib.sendStatusViaMailbox reply missing message_id")
                     end
                 else
-                    markWarn("INT-06", "sendStatusViaMailbox failed: " .. tostring(sendReply))
+                    markWarn("INT-06", "nlib.sendStatusViaMailbox failed: " .. tostring(sendReply))
                 end
             else
                 markSkip("INT-06", "Skipped mailbox send test because mailbox server_id was unavailable")
             end
 
-            local fetchOk, fetched = tlib.checkOfflineMessages(serverId)
+            local fetchOk, fetched = nlib.checkOfflineMessages(serverId)
             if fetchOk then
                 if type(fetched) == "table" then
                     record("PASS", "INT-07", "Mailbox fetch succeeded with " .. tostring(#fetched) .. " message(s)")
@@ -460,7 +466,7 @@ local function runOptionalIntegrationTests()
                 markSkip("INT-08", "Skipped payload shape check because mailbox fetch failed")
             end
         else
-            markWarn("INT-05", "pingMailbox unavailable/offline: " .. tostring(pingReply))
+            markWarn("INT-05", "nlib.pingMailbox unavailable/offline: " .. tostring(pingReply))
             markSkip("INT-06", "Skipped mailbox send test because mailbox server was unreachable")
             markSkip("INT-07", "Skipped mailbox fetch test because mailbox server was unreachable")
             markSkip("INT-08", "Skipped mailbox payload shape check because mailbox server was unreachable")
