@@ -505,56 +505,60 @@ local function requestTaskFromManager()
         error("requestTaskFromManager: failed to send task request: " .. tostring(sendErr))
     end
 
-    while true do
-        local recvTxOk, recvOk, recvRet = tlib.runRednetTransaction(function()
-            return nlib.receive(managerProtocol, 5)
-        end)
-        if not recvTxOk then
-            error("requestTaskFromManager: receive transaction failed: " .. tostring(recvOk))
-        end
-        if not recvOk then
-            error("requestTaskFromManager: receive failed: " .. tostring(recvRet))
+    local recvTxOk, recvRet = tlib.runRednetTransaction(function()
+        if not rednet then
+            return nil, "rednet unavailable"
         end
 
-        local senderID = recvRet and recvRet.sender_id
-        local payload = recvRet and recvRet.payload
-        if senderID == managerID and type(payload) == "table" and payload.messageType == "task_offer" then
-            if type(payload.body) ~= "table" then
-                error("requestTaskFromManager: invalid task offer body")
+        while true do
+            local senderID, payload = rednet.receive(managerProtocol, 5)
+            if senderID == managerID and type(payload) == "table" and payload.messageType == "task_offer" then
+                return payload
             end
-
-            local taskPayload = payload.body
-            local location = normalizeTaskLocation(taskPayload.location or {})
-            local settings = normalizeSettings(taskPayload.settings)
-            local filters = normalizeFilterList(taskPayload.filters)
-
-            p.activeTask = {
-                id = taskPayload.taskId,
-                requestedX = location.requestedX,
-                requestedZ = location.requestedZ,
-                chunkOriginX = location.chunkOriginX,
-                chunkOriginZ = location.chunkOriginZ,
-                turtleTargetX = location.turtleTargetX,
-                turtleTargetZ = location.turtleTargetZ,
-                presetName = taskPayload.presetName,
-                assignedAt = nowSeconds()
-            }
-            p.currentSettings = settings
-            p.currentFilters = filters
-            p.phase = "travel_to_task"
-            saveTask()
-
-            sendWorkerMessage(managerID, managerProtocol, "task_accept", {
-                taskId = taskPayload.taskId,
-                turtleTargetX = location.turtleTargetX,
-                turtleTargetZ = location.turtleTargetZ,
-                chunkOriginX = location.chunkOriginX,
-                chunkOriginZ = location.chunkOriginZ
-            })
-
-            return managerID, managerProtocol
         end
+    end)
+    if not recvTxOk then
+        error("requestTaskFromManager: receive transaction failed: " .. tostring(recvRet))
     end
+
+    local payload = recvRet
+    if type(payload) ~= "table" then
+        error("requestTaskFromManager: receive failed: invalid payload")
+    end
+    if type(payload.body) ~= "table" then
+        error("requestTaskFromManager: invalid task offer body")
+    end
+
+    local taskPayload = payload.body
+    local location = normalizeTaskLocation(taskPayload.location or {})
+    local settings = normalizeSettings(taskPayload.settings)
+    local filters = normalizeFilterList(taskPayload.filters)
+
+    p.activeTask = {
+        id = taskPayload.taskId,
+        requestedX = location.requestedX,
+        requestedZ = location.requestedZ,
+        chunkOriginX = location.chunkOriginX,
+        chunkOriginZ = location.chunkOriginZ,
+        turtleTargetX = location.turtleTargetX,
+        turtleTargetZ = location.turtleTargetZ,
+        presetName = taskPayload.presetName,
+        assignedAt = nowSeconds()
+    }
+    p.currentSettings = settings
+    p.currentFilters = filters
+    p.phase = "travel_to_task"
+    saveTask()
+
+    sendWorkerMessage(managerID, managerProtocol, "task_accept", {
+        taskId = taskPayload.taskId,
+        turtleTargetX = location.turtleTargetX,
+        turtleTargetZ = location.turtleTargetZ,
+        chunkOriginX = location.chunkOriginX,
+        chunkOriginZ = location.chunkOriginZ
+    })
+
+    return managerID, managerProtocol
 end
 
 local function reportTaskComplete(managerID, managerProtocol)
