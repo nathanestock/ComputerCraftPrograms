@@ -6,6 +6,8 @@ local textutils = rawget(_G, "textutils")
 local rednet = rawget(_G, "rednet")
 local sleep = rawget(_G, "sleep") or function(_) end
 local term = rawget(_G, "term")
+local colors = rawget(_G, "colors")
+local peripheral = rawget(_G, "peripheral")
 local parallel = rawget(_G, "parallel")
 local ccRead = rawget(_G, "read") or function() return nil end
 local ccWrite = rawget(_G, "write") or function(msg) print(tostring(msg or "")) end
@@ -104,6 +106,7 @@ local function makeDefaultState()
 end
 
 local state = makeDefaultState()
+local assignNextTaskToWorker
 
 local function shallowCopy(tbl)
     if type(tbl) ~= "table" then
@@ -194,7 +197,13 @@ local display = {
     device = nil,
     width = 0,
     height = 0,
-    usingMonitor = false
+    usingMonitor = false,
+    monitorSide = nil,
+    touchZones = {}
+}
+
+local uiState = {
+    view = "overview"
 }
 
 local function attachDisplay()
@@ -213,10 +222,20 @@ local function attachDisplay()
         end
 
         local w, h = monitor.getSize()
+        local side = nil
+        if peripheral and type(peripheral.getName) == "function" then
+            local okName, name = pcall(peripheral.getName, monitor)
+            if okName and name then
+                side = tostring(name)
+            end
+        end
+
         display.device = monitor
         display.width = w
         display.height = h
         display.usingMonitor = true
+        display.monitorSide = side
+        display.touchZones = {}
         return true
     end
 
@@ -232,6 +251,8 @@ local function attachDisplay()
     end
 
     display.usingMonitor = false
+    display.monitorSide = nil
+    display.touchZones = {}
     return false
 end
 
@@ -242,7 +263,88 @@ local function writeLine(device, x, y, message)
     device.write(text)
 end
 
-local function drawUI(statusLine)
+local function workerCount()
+    local c = 0
+    for _ in pairs(state.workers) do
+        c = c + 1
+    end
+    return c
+end
+
+local function activeCount()
+    local c = 0
+    for _ in pairs(state.active) do
+        c = c + 1
+    end
+    return c
+end
+
+local function setColors(device, textColor, backgroundColor)
+    if not colors then
+        return
+    end
+    if textColor and type(device.setTextColor) == "function" then
+        device.setTextColor(textColor)
+    end
+    if backgroundColor and type(device.setBackgroundColor) == "function" then
+        device.setBackgroundColor(backgroundColor)
+    end
+end
+
+local function paintLine(device, y, backgroundColor, message, textColor)
+    if y < 1 or y > display.height then
+        return
+    end
+    setColors(device, textColor, backgroundColor)
+    device.setCursorPos(1, y)
+    device.write(string.rep(" ", display.width))
+    if message and message ~= "" then
+        device.setCursorPos(1, y)
+        device.write(tostring(message):sub(1, display.width))
+    end
+end
+
+local function pad(text, width)
+    local raw = tostring(text or "")
+    if #raw >= width then
+        return raw:sub(1, width)
+    end
+    return raw .. string.rep(" ", width - #raw)
+end
+
+local function monitorAddZone(x1, y1, x2, y2, action)
+    if x2 < x1 or y2 < y1 then
+        return
+    end
+    display.touchZones[#display.touchZones + 1] = {
+        x1 = x1,
+        y1 = y1,
+        x2 = x2,
+        y2 = y2,
+        action = action
+    }
+end
+
+local function drawMonitorButton(device, x1, y1, x2, y2, label, bg, fg, action)
+    for y = y1, y2 do
+        setColors(device, fg, bg)
+        device.setCursorPos(x1, y)
+        device.write(string.rep(" ", math.max(0, x2 - x1 + 1)))
+    end
+
+    local width = math.max(0, x2 - x1 + 1)
+    local text = tostring(label or "")
+    local startX = x1 + math.max(0, math.floor((width - #text) / 2))
+    local textY = y1 + math.floor(math.max(0, y2 - y1) / 2)
+    if textY >= y1 and textY <= y2 then
+        device.setCursorPos(startX, textY)
+        device.write(text:sub(1, width))
+    end
+
+    monitorAddZone(x1, y1, x2, y2, action)
+end
+
+local function drawTerminalUI(statusLine)
     local device = display.device
     if not device then
         return
@@ -254,27 +356,15 @@ local function drawUI(statusLine)
     local width = display.width
     local row = 1
 
-    writeLine(device, 1, row, "Digital Mining Manager" .. (display.usingMonitor and " [MONITOR]" or " [TERMINAL]"))
+    writeLine(device, 1, row, "Digital Mining Manager [TERMINAL]")
     row = row + 1
     writeLine(device, 1, row,
         string.format("Host: %s  Protocol: %s  ID: %s", state.manager.label, state.manager.protocol, tostring(state.manager.id)))
     row = row + 1
     writeLine(device, 1, row, string.format("Workers: %d  Queue: %d  Active: %d  Completed: %d",
-        (function()
-            local c = 0
-            for _ in pairs(state.workers) do
-                c = c + 1
-            end
-            return c
-        end)(),
+        workerCount(),
         #state.queue,
-        (function()
-            local c = 0
-            for _ in pairs(state.active) do
-                c = c + 1
-            end
-            return c
-        end)(),
+        activeCount(),
         #state.completed
     ))
     row = row + 1
@@ -306,6 +396,183 @@ local function drawUI(statusLine)
             writeLine(device, 1, row + i - 1, rows[i]:sub(1, width))
         end
     end
+end
+
+local function drawMonitorUI(statusLine)
+    local device = display.device
+    if not device then
+        return
+    end
+
+    display.touchZones = {}
+
+    setColors(device, colors and colors.white or nil, colors and colors.black or nil)
+    device.setCursorPos(1, 1)
+    device.clear()
+
+    local w = display.width
+    local h = display.height
+    local activeWorkers = activeCount()
+
+    paintLine(device, 1, colors and colors.blue or nil,
+        pad(" DIGITAL MINING MANAGER", w), colors and colors.white or nil)
+    paintLine(device, 2, colors and colors.gray or nil,
+        pad(" " .. tostring(state.manager.label) .. "  id:" .. tostring(state.manager.id), w),
+        colors and colors.black or nil)
+
+    local left = string.format("W:%d Q:%d A:%d C:%d", workerCount(), #state.queue, activeWorkers, #state.completed)
+    local pauseState = state.dispatchPaused and "PAUSED" or "RUNNING"
+    paintLine(device, 3, colors and colors.lightGray or nil,
+        pad(" " .. left .. "  " .. pauseState, w), colors and colors.black or nil)
+
+    local contentTop = 4
+    local buttonTop = math.max(contentTop + 1, h - 2)
+    local contentBottom = buttonTop - 1
+
+    if uiState.view == "workers" then
+        paintLine(device, contentTop, colors and colors.brown or nil, pad(" Workers", w), colors and colors.white or nil)
+        local rows = {}
+        for workerID, worker in pairs(state.workers) do
+            rows[#rows + 1] = string.format("%s %s %s", tostring(workerID), tostring(worker.status or "?"),
+                tostring(worker.activeTaskId or "-"))
+        end
+        table.sort(rows)
+        local outRow = contentTop + 1
+        for i = 1, #rows do
+            if outRow > contentBottom then
+                break
+            end
+            paintLine(device, outRow, colors and colors.black or nil, " " .. rows[i], colors and colors.white or nil)
+            outRow = outRow + 1
+        end
+        while outRow <= contentBottom do
+            paintLine(device, outRow, colors and colors.black or nil, "", colors and colors.white or nil)
+            outRow = outRow + 1
+        end
+    else
+        paintLine(device, contentTop, colors and colors.brown or nil, pad(" Overview", w), colors and colors.white or nil)
+
+        local outRow = contentTop + 1
+        if outRow <= contentBottom then
+            paintLine(device, outRow, colors and colors.black or nil,
+                " Status: " .. tostring(statusLine or "idle"), colors and colors.white or nil)
+            outRow = outRow + 1
+        end
+        if outRow <= contentBottom then
+            local nextTask = state.queue[1]
+            local nextText = " none"
+            if nextTask and nextTask.location then
+                nextText = string.format(" %s @ %d,%d", tostring(nextTask.taskId or "?"),
+                    tonumber(nextTask.location.requestedX) or 0, tonumber(nextTask.location.requestedZ) or 0)
+            end
+            paintLine(device, outRow, colors and colors.black or nil, " Next:" .. nextText, colors and colors.yellow or nil)
+            outRow = outRow + 1
+        end
+        if outRow <= contentBottom then
+            paintLine(device, outRow, colors and colors.black or nil,
+                " Protocol: " .. tostring(state.manager.protocol), colors and colors.lightBlue or nil)
+            outRow = outRow + 1
+        end
+        while outRow <= contentBottom do
+            paintLine(device, outRow, colors and colors.black or nil, "", colors and colors.white or nil)
+            outRow = outRow + 1
+        end
+    end
+
+    local half = math.floor(w / 2)
+    local firstLabel = state.dispatchPaused and "Resume" or "Pause"
+    local firstBg = state.dispatchPaused and (colors and colors.green or nil) or (colors and colors.red or nil)
+    drawMonitorButton(device, 1, buttonTop, math.max(1, half), buttonTop, firstLabel, firstBg,
+        colors and colors.white or nil, "toggle_dispatch")
+    drawMonitorButton(device, half + 1, buttonTop, w, buttonTop, "View", colors and colors.orange or nil,
+        colors and colors.white or nil, "cycle_view")
+
+    drawMonitorButton(device, 1, buttonTop + 1, math.max(1, half), buttonTop + 1, "Dispatch", colors and colors.lime or nil,
+        colors and colors.black or nil, "dispatch_once")
+    drawMonitorButton(device, half + 1, buttonTop + 1, w, buttonTop + 1, "Refresh", colors and colors.cyan or nil,
+        colors and colors.black or nil, "refresh")
+
+    paintLine(device, h, colors and colors.gray or nil,
+        pad(" Touch buttons to control manager", w), colors and colors.black or nil)
+end
+
+local function drawUI(statusLine)
+    local device = display.device
+    if not device then
+        return
+    end
+
+    if display.usingMonitor then
+        drawMonitorUI(statusLine)
+        return
+    end
+
+    drawTerminalUI(statusLine)
+end
+
+local function dispatchOneTask()
+    if state.dispatchPaused then
+        return false, "dispatch paused"
+    end
+    if #state.queue == 0 then
+        return false, "queue empty"
+    end
+
+    local workerKeys = {}
+    for id in pairs(state.workers) do
+        workerKeys[#workerKeys + 1] = id
+    end
+    table.sort(workerKeys)
+
+    for i = 1, #workerKeys do
+        local id = workerKeys[i]
+        local worker = state.workers[id]
+        if worker and not worker.activeTaskId then
+            return assignNextTaskToWorker(tonumber(id))
+        end
+    end
+    return false, "no idle worker"
+end
+
+local function handleMonitorTouch(side, x, y)
+    if not display.usingMonitor then
+        return nil
+    end
+    if display.monitorSide and tostring(side or "") ~= tostring(display.monitorSide) then
+        return nil
+    end
+
+    for i = 1, #display.touchZones do
+        local zone = display.touchZones[i]
+        if x >= zone.x1 and x <= zone.x2 and y >= zone.y1 and y <= zone.y2 then
+            if zone.action == "toggle_dispatch" then
+                state.dispatchPaused = not state.dispatchPaused
+                saveState()
+                return state.dispatchPaused and "touch: dispatch paused" or "touch: dispatch resumed"
+            end
+            if zone.action == "cycle_view" then
+                if uiState.view == "overview" then
+                    uiState.view = "workers"
+                else
+                    uiState.view = "overview"
+                end
+                return "touch: view " .. uiState.view
+            end
+            if zone.action == "dispatch_once" then
+                local okDispatch, retDispatch = dispatchOneTask()
+                if okDispatch then
+                    saveState()
+                    return "touch: assigned " .. tostring(retDispatch)
+                end
+                return "touch: " .. tostring(retDispatch)
+            end
+            if zone.action == "refresh" then
+                return "touch: refreshed"
+            end
+        end
+    end
+
+    return "touch: " .. tostring(x) .. "," .. tostring(y)
 end
 
 local function taskOverlaps(existing, candidate)
@@ -395,7 +662,7 @@ local function enqueueTask(x, z, presetName, settings)
     return true, taskId
 end
 
-local function assignNextTaskToWorker(workerID)
+assignNextTaskToWorker = function(workerID)
     if state.dispatchPaused then
         return false, "dispatch paused"
     end
@@ -709,6 +976,15 @@ local function eventLoop()
                 statusLine = handleManagerProtocol(senderID, payload)
             end
 
+            drawUI(statusLine)
+        elseif eventName == "monitor_touch" then
+            local side = eventData[2]
+            local x = tonumber(eventData[3]) or 0
+            local y = tonumber(eventData[4]) or 0
+            local touchStatus = handleMonitorTouch(side, x, y)
+            if touchStatus then
+                statusLine = touchStatus
+            end
             drawUI(statusLine)
         elseif eventName == "timer" and (tickTimer == nil or eventData[2] == tickTimer) then
             drawUI(statusLine)
