@@ -276,24 +276,21 @@ local function runEntangloporterRefuelStrategy(options)
 
         if placed then
             turtle.select(entangloporterSlot or selectedBefore)
-            local dug = false
-            local lastErr = nil
-            for _ = 1, 3 do
-                local ok, err = ops.dig()
-                if ok then
-                    dug = true
-                    placed = false
-                    break
-                end
-                lastErr = err
-                sleep(0.1)
+            local digFn = tlib.dig
+            if cfg.side == "up" then
+                digFn = tlib.digUp
+            elseif cfg.side == "down" then
+                digFn = tlib.digDown
             end
 
+            local dug, digErr = digFn()
             if not dug then
                 turtle.select(selectedBefore)
                 tlib.scanInventory()
-                return false, "cleanup_failed: could not recover entangloporter (" .. tostring(lastErr) .. ")"
+                return false, "cleanup_failed: could not recover entangloporter (" .. tostring(digErr) .. ")"
             end
+
+            placed = false
         end
 
         turtle.select(selectedBefore)
