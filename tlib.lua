@@ -1675,7 +1675,7 @@ function tlib.showUI()
         end
 
         for i = 1, #programs do
-            table.insert(dependencies, programs[i])
+            table.insert(targets, programs[i])
         end
 
         local okCount = 0
