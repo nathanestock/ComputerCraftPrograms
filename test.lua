@@ -399,7 +399,7 @@ local function runOptionalIntegrationTests()
             local serverId = replyType == "table" and pingReply.server_id or nil
             record("PASS", "INT-05", "pingMailbox succeeded; server_id=" .. tostring(serverId))
 
-            local computerIdFn = rawget(_G, "getComputerID")
+            local computerIdFn = rawget(_G.os, "getComputerID")
             if type(computerIdFn) == "function" then
                 local targetId = computerIdFn()
                 local testMessage = "tlib mailbox integration test @" .. tostring(nowStamp())
