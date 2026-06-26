@@ -1,13 +1,13 @@
 -- tlib_mailbox.lua
 -- Mailbox server + CLI utility for turtle status relay/queue operations.
 
-local ok, tlibOrErr = pcall(require, "tlib")
-if not ok then
-    print("Failed to load tlib: " .. tostring(tlibOrErr))
-    return
+local tlib = nil
+do
+    local ok, tlibOrErr = pcall(require, "tlib")
+    if ok and type(tlibOrErr) == "table" then
+        tlib = tlibOrErr
+    end
 end
-
-local tlib = tlibOrErr
 
 local plib = require("plib")
 local fs = rawget(_G, "fs")
@@ -349,6 +349,19 @@ local function printUsage()
     print("  tlib_mailbox send_direct <targetId> <status text>")
     print("  tlib_mailbox send_direct_error <targetId> <status text>")
     print("  tlib_mailbox fetch [mailboxServerId]")
+    print("  NOTE: ping/broadcast/send/fetch commands require tlib (turtle client)")
+end
+
+local function requireTlib(commandName)
+    if tlib then
+        return true
+    end
+
+    printError(string.format(
+        "Command '%s' requires tlib/turtle APIs. Run server mode on this computer, or run this command on a turtle with tlib installed.",
+        tostring(commandName)
+    ))
+    return false
 end
 
 local function printMessages(messages)
@@ -384,8 +397,13 @@ if cmd == "server" then
 end
 
 if cmd == "ping" then
+    if not requireTlib("ping") then
+        return
+    end
+
+    local lib = assert(tlib)
     local mailboxServerID = tonumber(args[2])
-    local success, reply = tlib.pingMailbox(mailboxServerID)
+    local success, reply = lib.pingMailbox(mailboxServerID)
     if success then
         print("Mailbox server reachable: " .. tostring(reply and reply.server_id or "unknown"))
     else
@@ -395,13 +413,18 @@ if cmd == "ping" then
 end
 
 if cmd == "broadcast" then
+    if not requireTlib("broadcast") then
+        return
+    end
+
+    local lib = assert(tlib)
     local statusText = joinFrom(args, 2)
     if statusText == "" then
         printError("Status text is required.")
         return
     end
 
-    local success, ret = tlib.broadcastStatus(statusText, false)
+    local success, ret = lib.broadcastStatus(statusText, false)
     if success then
         print("Status broadcast sent.")
     else
@@ -411,13 +434,18 @@ if cmd == "broadcast" then
 end
 
 if cmd == "broadcast_error" then
+    if not requireTlib("broadcast_error") then
+        return
+    end
+
+    local lib = assert(tlib)
     local statusText = joinFrom(args, 2)
     if statusText == "" then
         printError("Status text is required.")
         return
     end
 
-    local success, ret = tlib.broadcastStatus(statusText, true)
+    local success, ret = lib.broadcastStatus(statusText, true)
     if success then
         print("Error status broadcast sent.")
     else
@@ -427,6 +455,11 @@ if cmd == "broadcast_error" then
 end
 
 if cmd == "send" or cmd == "send_error" then
+    if not requireTlib(cmd) then
+        return
+    end
+
+    local lib = assert(tlib)
     local targetId = tonumber(args[2])
     if not targetId then
         printError("targetId must be a number.")
@@ -455,7 +488,7 @@ if cmd == "send" or cmd == "send_error" then
     end
 
     local isError = (cmd == "send_error")
-    local success, ret = tlib.sendStatusViaMailbox(targetId, statusText, isError, mailboxServerID)
+    local success, ret = lib.sendStatusViaMailbox(targetId, statusText, isError, mailboxServerID)
     if success then
         if type(ret) == "table" and ret.delivered then
             print("Status delivered directly to " .. tostring(targetId) .. ".")
@@ -469,6 +502,11 @@ if cmd == "send" or cmd == "send_error" then
 end
 
 if cmd == "send_direct" or cmd == "send_direct_error" then
+    if not requireTlib(cmd) then
+        return
+    end
+
+    local lib = assert(tlib)
     local targetId = tonumber(args[2])
     if not targetId then
         printError("targetId must be a number.")
@@ -482,7 +520,7 @@ if cmd == "send_direct" or cmd == "send_direct_error" then
     end
 
     local isError = (cmd == "send_direct_error")
-    local success, ret = tlib.sendStatus(targetId, statusText, isError)
+    local success, ret = lib.sendStatus(targetId, statusText, isError)
     if success then
         print("Direct status message sent to " .. tostring(targetId) .. ".")
     else
@@ -492,8 +530,13 @@ if cmd == "send_direct" or cmd == "send_direct_error" then
 end
 
 if cmd == "fetch" then
+    if not requireTlib("fetch") then
+        return
+    end
+
+    local lib = assert(tlib)
     local mailboxServerID = tonumber(args[2])
-    local success, messages = tlib.checkOfflineMessages(mailboxServerID)
+    local success, messages = lib.checkOfflineMessages(mailboxServerID)
     if success then
         printMessages(messages)
     else

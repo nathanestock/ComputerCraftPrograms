@@ -1,5 +1,54 @@
 -- Turtle Library (tlib.lua)
 local tlib = {}
+local turtle = rawget(_G, "turtle")
+local hasTurtle = type(turtle) == "table"
+
+if not hasTurtle then
+    local selectedSlot = 1
+    local function unsupportedTurtleAction()
+        return false, "Turtle API unavailable on this computer"
+    end
+
+    turtle = {
+        getFuelLevel = function() return "unlimited" end,
+        getFuelLimit = function() return "unlimited" end,
+        getSelectedSlot = function() return selectedSlot end,
+        select = function(slot)
+            if type(slot) == "number" and slot >= 1 and slot <= 16 then
+                selectedSlot = math.floor(slot)
+                return true
+            end
+            return false
+        end,
+        getItemDetail = function() return nil end,
+        refuel = unsupportedTurtleAction,
+        place = unsupportedTurtleAction,
+        placeUp = unsupportedTurtleAction,
+        placeDown = unsupportedTurtleAction,
+        suck = unsupportedTurtleAction,
+        suckUp = unsupportedTurtleAction,
+        suckDown = unsupportedTurtleAction,
+        drop = unsupportedTurtleAction,
+        dropUp = unsupportedTurtleAction,
+        dropDown = unsupportedTurtleAction,
+        dig = unsupportedTurtleAction,
+        digUp = unsupportedTurtleAction,
+        digDown = unsupportedTurtleAction,
+        equipLeft = unsupportedTurtleAction,
+        equipRight = unsupportedTurtleAction,
+        getEquippedLeft = function() return nil end,
+        getEquippedRight = function() return nil end,
+        forward = unsupportedTurtleAction,
+        back = unsupportedTurtleAction,
+        up = unsupportedTurtleAction,
+        down = unsupportedTurtleAction,
+        turnLeft = unsupportedTurtleAction,
+        turnRight = unsupportedTurtleAction,
+        detect = function() return false end,
+        detectUp = function() return false end,
+        detectDown = function() return false end
+    }
+end
 
 local programs = {
     "test",
@@ -899,10 +948,23 @@ local function getWirelessModemSide()
     return nil
 end
 
+local function getAnyModemSide()
+    for _, side in ipairs(peripheral.getNames()) do
+        if peripheral.getType(side) == "modem" then
+            return side
+        end
+    end
+    return nil
+end
+
 local function equipModem()
-    local existingSide = getWirelessModemSide()
+    local existingSide = getWirelessModemSide() or getAnyModemSide()
     if existingSide then
         return true, existingSide, false
+    end
+
+    if not hasTurtle then
+        return false, "No modem peripheral attached to this computer."
     end
 
     local targetSide = "left"
