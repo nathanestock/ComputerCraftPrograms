@@ -157,7 +157,7 @@ local function run()
         print("Digital Mining: Initializing...")
 
         local strategyOk, strategyErr = tlib.useRefuelStrategy("entangloporter", {
-            side = "front",
+            side = "up",
             entangloporterItem = "quantum_entangloporter",
             fuelItemPattern = "lava_bucket",
             pullCount = 16,
