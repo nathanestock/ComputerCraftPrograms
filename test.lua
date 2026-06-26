@@ -391,19 +391,37 @@ end
 local function collectDetailedResults()
     local detailEntries = {}
 
+    local priority = {
+        FAIL = 1,
+        SKIP = 2,
+        WARN = 3,
+        PASS = 4
+    }
+
     for _, entry in ipairs(test.assertions) do
-        local status = entry and entry.status
-        if status == "FAIL" or status == "SKIP" or status == "WARN" then
+        if entry and entry.status then
             table.insert(detailEntries, entry)
         end
     end
+
+    table.sort(detailEntries, function(a, b)
+        local pa = priority[a.status] or 99
+        local pb = priority[b.status] or 99
+        if pa ~= pb then
+            return pa < pb
+        end
+
+        local atA = a.at or 0
+        local atB = b.at or 0
+        return atA < atB
+    end)
 
     return detailEntries
 end
 
 local function printDetailedResultsFallback(detailEntries)
     print("")
-    print("=== Results (FAIL/SKIP/WARN) ===")
+    print("=== Results (FAIL/SKIP/WARN/PASS) ===")
 
     for i, entry in ipairs(detailEntries) do
         local status = tostring(entry.status or "?")
@@ -445,7 +463,7 @@ local function printDetailedResultsInteractive(detailEntries)
         ccTerm.clear()
         ccTerm.setCursorPos(1, 1)
         setColor(ccColors and ccColors.lightBlue)
-        print("=== Results (FAIL/SKIP/WARN) ===")
+        print("=== Results (FAIL/SKIP/WARN/PASS) ===")
         resetColor()
         print(string.format("Showing %d-%d of %d", offset, math.min(offset + visibleRows - 1, #detailEntries), #detailEntries))
         print("Use Up/Down to scroll, Q to close")
