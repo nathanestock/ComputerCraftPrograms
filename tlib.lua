@@ -54,6 +54,7 @@ local dependencies = {
     "tlib",
     "plib",
     "nlib",
+    "digital_mining_manager",
 }
 
 local programs = {

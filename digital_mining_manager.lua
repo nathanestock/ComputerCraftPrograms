@@ -1,4 +1,5 @@
 local nlib = require("nlib")
+local plib = require("plib")
 
 local fs = rawget(_G, "fs")
 local textutils = rawget(_G, "textutils")
@@ -189,17 +190,76 @@ local function saveState()
     return true
 end
 
+local display = {
+    device = nil,
+    width = 0,
+    height = 0,
+    usingMonitor = false
+}
+
+local function attachDisplay()
+    local monitor = nil
+    local ok, wrapped = pcall(function()
+        return plib.wrap("monitor", "monitor")
+    end)
+
+    if ok and wrapped then
+        monitor = wrapped
+    end
+
+    if monitor and type(monitor.getSize) == "function" then
+        if type(monitor.setTextScale) == "function" then
+            monitor.setTextScale(0.5)
+        end
+
+        local w, h = monitor.getSize()
+        display.device = monitor
+        display.width = w
+        display.height = h
+        display.usingMonitor = true
+        return true
+    end
+
+    if term and type(term.getSize) == "function" then
+        local w, h = term.getSize()
+        display.device = term
+        display.width = w
+        display.height = h
+    else
+        display.device = nil
+        display.width = 0
+        display.height = 0
+    end
+
+    display.usingMonitor = false
+    return false
+end
+
+local function writeLine(device, x, y, message)
+    local text = tostring(message or "")
+    device.setCursorPos(x, y)
+    device.clearLine()
+    device.write(text)
+end
+
 local function drawUI(statusLine)
-    if not term then
+    local device = display.device
+    if not device then
         return
     end
 
-    term.setCursorPos(1, 1)
-    term.clear()
+    device.setCursorPos(1, 1)
+    device.clear()
 
-    print("Digital Mining Manager")
-    print(string.format("Host: %s  Protocol: %s  ID: %s", state.manager.label, state.manager.protocol, tostring(state.manager.id)))
-    print(string.format("Workers: %d  Queue: %d  Active: %d  Completed: %d",
+    local width = display.width
+    local row = 1
+
+    writeLine(device, 1, row, "Digital Mining Manager" .. (display.usingMonitor and " [MONITOR]" or " [TERMINAL]"))
+    row = row + 1
+    writeLine(device, 1, row,
+        string.format("Host: %s  Protocol: %s  ID: %s", state.manager.label, state.manager.protocol, tostring(state.manager.id)))
+    row = row + 1
+    writeLine(device, 1, row, string.format("Workers: %d  Queue: %d  Active: %d  Completed: %d",
         (function()
             local c = 0
             for _ in pairs(state.workers) do
@@ -217,11 +277,15 @@ local function drawUI(statusLine)
         end)(),
         #state.completed
     ))
-    print(string.format("Dispatch paused: %s", tostring(state.dispatchPaused)))
-    print("Commands: queue <x> <z> [preset] [radius] [minY] [maxY] [silkTouch] | pause | resume | presets | workers")
-    print("Status: " .. tostring(statusLine or "idle"))
-    print("")
-    print("Recent workers:")
+    row = row + 1
+    writeLine(device, 1, row, string.format("Dispatch paused: %s", tostring(state.dispatchPaused)))
+    row = row + 1
+    writeLine(device, 1, row, "Commands: queue <x> <z> [preset] [radius] [minY] [maxY] [silkTouch] | pause | resume | presets | workers")
+    row = row + 1
+    writeLine(device, 1, row, "Status: " .. tostring(statusLine or "idle"))
+    row = row + 2
+    writeLine(device, 1, row, "Recent workers:")
+    row = row + 1
 
     local rows = {}
     for workerID, worker in pairs(state.workers) do
@@ -235,10 +299,11 @@ local function drawUI(statusLine)
     end
     table.sort(rows)
     if #rows == 0 then
-        print("- none")
+        writeLine(device, 1, row, "- none")
     else
-        for i = 1, math.min(#rows, 10) do
-            print(rows[i])
+        local availableRows = math.max(0, display.height - row + 1)
+        for i = 1, math.min(#rows, availableRows) do
+            writeLine(device, 1, row + i - 1, rows[i]:sub(1, width))
         end
     end
 end
@@ -673,6 +738,12 @@ end
 local function main()
     state = loadState()
     saveState()
+    attachDisplay()
+    if display.usingMonitor then
+        print("Monitor attached for digital mining manager UI.")
+    else
+        print("Monitor not attached. Using terminal UI.")
+    end
 
     if parallel and parallel.waitForAny then
         parallel.waitForAny(eventLoop, commandLoop)
