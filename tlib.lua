@@ -2107,6 +2107,13 @@ end]]
     else
         printError("Failed to write startup.lua.")
     end
+elseif args[1] == "install_mailbox" or args[1] == "-im" then
+    local ok, msg = tlib.installMailbox()
+    if ok then
+        print(tostring(msg or "Mailbox startup installed."))
+    else
+        printError("Failed to install mailbox startup: " .. tostring(msg))
+    end
 end
 
 return tlib
