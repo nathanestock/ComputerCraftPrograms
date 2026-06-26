@@ -375,6 +375,10 @@ local function moveToTaskLocation(location)
 end
 
 local function sendWorkerMessage(managerID, managerProtocol, messageType, body)
+    if type(managerID) ~= "number" then
+        return false, "invalid manager ID: expected number, got " .. type(managerID)
+    end
+
     local payload = {
         messageType = messageType,
         protocolVersion = 1,
@@ -480,11 +484,14 @@ end
 
 local function requestTaskFromManager()
     local managerLabel, managerProtocol = resolveManagerSelection()
-    local lookupTxOk, managerID = tlib.runRednetTransaction(function()
+    local lookupTxOk, lookupOk, managerID = tlib.runRednetTransaction(function()
         return nlib.lookup(managerProtocol, managerLabel)
     end)
     if not lookupTxOk then
-        error("requestTaskFromManager: manager lookup transaction failed: " .. tostring(managerID))
+        error("requestTaskFromManager: manager lookup transaction failed: " .. tostring(lookupOk))
+    end
+    if not lookupOk then
+        error("requestTaskFromManager: manager lookup failed")
     end
     if not managerID then
         error("requestTaskFromManager: manager host unavailable for protocol " .. managerProtocol)
@@ -985,11 +992,14 @@ local function run()
     if p.phase == "finalize" then
         p.completed = true
         local managerLabel, managerProtocol = resolveManagerSelection()
-        local lookupTxOk, managerID = tlib.runRednetTransaction(function()
+        local lookupTxOk, lookupOk, managerID = tlib.runRednetTransaction(function()
             return nlib.lookup(managerProtocol, managerLabel)
         end)
         if not lookupTxOk then
-            error("finalize: manager lookup transaction failed: " .. tostring(managerID))
+            error("finalize: manager lookup transaction failed: " .. tostring(lookupOk))
+        end
+        if not lookupOk then
+            error("finalize: manager lookup failed")
         end
         if managerID then
             reportTaskComplete(managerID, managerProtocol)
