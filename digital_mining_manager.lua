@@ -119,6 +119,24 @@ local function shallowCopy(tbl)
     return out
 end
 
+local function deepCopy(value, seen)
+    if type(value) ~= "table" then
+        return value
+    end
+
+    seen = seen or {}
+    if seen[value] then
+        return seen[value]
+    end
+
+    local out = {}
+    seen[value] = out
+    for k, v in pairs(value) do
+        out[deepCopy(k, seen)] = deepCopy(v, seen)
+    end
+    return out
+end
+
 local function loadState()
     if not fs or not fs.exists or not fs.exists(STATE_FILE) then
         return makeDefaultState()
@@ -651,7 +669,7 @@ local function enqueueTask(x, z, presetName, settings)
         taskId = taskId,
         location = location,
         presetName = preset,
-        filters = filters,
+        filters = deepCopy(filters),
         settings = mergedSettings,
         footprint = footprint,
         createdAt = nowSeconds(),
