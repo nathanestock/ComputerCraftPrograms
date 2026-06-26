@@ -405,7 +405,13 @@ if cmd == "ping" then
     local mailboxServerID = tonumber(args[2])
     local success, reply = lib.pingMailbox(mailboxServerID)
     if success then
-        print("Mailbox server reachable: " .. tostring(reply and reply.server_id or "unknown"))
+        local serverID = "unknown"
+        if type(reply) == "table" and reply.server_id ~= nil then
+            serverID = tostring(reply.server_id)
+        elseif type(reply) == "number" or type(reply) == "string" then
+            serverID = tostring(reply)
+        end
+        print("Mailbox server reachable: " .. serverID)
     else
         printError("Ping failed: " .. tostring(reply))
     end
