@@ -406,11 +406,12 @@ local function runOptionalIntegrationTests()
                 local sendOk, sendReply = tlib.sendStatusViaMailbox(targetId, testMessage, false, serverId)
 
                 if sendOk then
-                    local delivered = type(sendReply) == "table" and sendReply.delivered == true
-                    if delivered then
-                        record("PASS", "INT-06", "sendStatusViaMailbox relayed directly")
+                    if type(sendReply) == "table" and type(sendReply.message_id) == "string" then
+                        local mode = sendReply.queued and "queued" or (sendReply.ack_pending and "awaiting_ack" or "accepted")
+                        record("PASS", "INT-06", "sendStatusViaMailbox accepted message_id=" .. tostring(sendReply.message_id) ..
+                            " mode=" .. tostring(mode))
                     else
-                        record("PASS", "INT-06", "sendStatusViaMailbox queued message")
+                        record("PASS", "INT-06", "sendStatusViaMailbox completed")
                     end
                 else
                     markWarn("INT-06", "sendStatusViaMailbox failed: " .. tostring(sendReply))
@@ -429,7 +430,14 @@ local function runOptionalIntegrationTests()
                         local payload = first.payload or first.message
                         local statusText = type(payload) == "table" and payload.status or nil
                         if type(statusText) == "string" and statusText ~= "" then
-                            record("PASS", "INT-08", "Fetched mailbox message includes status payload")
+                            local hasMessageID = type(first.message_id) == "string" and first.message_id ~= ""
+                            local ackTracked = (first.ack_ok == nil) or (type(first.ack_ok) == "boolean")
+                            if hasMessageID and ackTracked then
+                                record("PASS", "INT-08",
+                                    "Fetched mailbox message includes status payload and ACK metadata")
+                            else
+                                markWarn("INT-08", "Fetched mailbox message missing ACK metadata fields")
+                            end
                         else
                             markWarn("INT-08", "Fetched mailbox message did not include expected status payload")
                         end

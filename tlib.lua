@@ -1198,6 +1198,200 @@ end
 -- =============================================================================
 
 local MAILBOX_STORE_FILE = "turtle_mailbox_store.json"
+local MAILBOX_PROTOCOL = "turtle_mailbox"
+local MAILBOX_ACK_TIMEOUT_SECONDS = 5
+
+local function mailboxNowSeconds()
+    if os and type(os.epoch) == "function" then
+        return math.floor(os.epoch("utc") / 1000)
+    end
+    return math.floor(os.clock())
+end
+
+local function cloneShallowTable(value)
+    if type(value) ~= "table" then
+        return value
+    end
+
+    local out = {}
+    for k, v in pairs(value) do
+        out[k] = v
+    end
+    return out
+end
+
+local function ensureMailboxStoreShape(store)
+    if type(store) ~= "table" then
+        store = {}
+    end
+
+    local queued = store.queued
+    local inflight = store.inflight
+
+    if type(queued) ~= "table" or type(inflight) ~= "table" then
+        local migratedQueued = {}
+        for key, value in pairs(store) do
+            if type(key) == "string" and type(value) == "table" then
+                migratedQueued[key] = value
+            end
+        end
+
+        queued = migratedQueued
+        inflight = {}
+        store = {
+            queued = queued,
+            inflight = inflight,
+            sequence = tonumber(store.sequence) or 0
+        }
+        return store
+    end
+
+    store.queued = queued
+    store.inflight = inflight
+    store.sequence = tonumber(store.sequence) or 0
+    return store
+end
+
+local function ensureMailboxBucket(tbl, key)
+    if type(tbl[key]) ~= "table" then
+        tbl[key] = {}
+    end
+    return tbl[key]
+end
+
+local function removeMessageById(messages, messageID)
+    if type(messages) ~= "table" then
+        return nil
+    end
+
+    for i = #messages, 1, -1 do
+        local msg = messages[i]
+        if type(msg) == "table" and msg.message_id == messageID then
+            table.remove(messages, i)
+            return msg
+        end
+    end
+
+    return nil
+end
+
+local function nextMailboxMessageID(store, targetID)
+    store.sequence = (tonumber(store.sequence) or 0) + 1
+    local computerID = (os and type(os.getComputerID) == "function") and os.getComputerID() or -1
+    return string.format("%s-%s-%s", tostring(computerID), tostring(mailboxNowSeconds()), tostring(store.sequence))
+end
+
+local function buildMailboxEntry(store, senderID, targetID, payload, ackTimeout)
+    local timeout = tonumber(ackTimeout) or MAILBOX_ACK_TIMEOUT_SECONDS
+    if timeout < 1 then
+        timeout = MAILBOX_ACK_TIMEOUT_SECONDS
+    end
+
+    local statusText = payload and payload.status or nil
+    local isError = payload and payload.is_error or false
+
+    return {
+        message_id = nextMailboxMessageID(store, targetID),
+        from = senderID,
+        target = targetID,
+        payload = cloneShallowTable(payload),
+        message = statusText,
+        is_error = isError,
+        ts = mailboxNowSeconds(),
+        ack_timeout_s = timeout,
+        expires_at = nil
+    }
+end
+
+local function moveToInflight(store, targetID, entry)
+    local key = tostring(targetID)
+    local inflightBucket = ensureMailboxBucket(store.inflight, key)
+    entry.expires_at = mailboxNowSeconds() + (tonumber(entry.ack_timeout_s) or MAILBOX_ACK_TIMEOUT_SECONDS)
+    table.insert(inflightBucket, entry)
+end
+
+local function enqueueMailboxEntry(store, targetID, entry)
+    local key = tostring(targetID)
+    local queuedBucket = ensureMailboxBucket(store.queued, key)
+    entry.expires_at = nil
+    table.insert(queuedBucket, entry)
+end
+
+local function requeueExpiredInflight(store)
+    local changed = false
+    local now = mailboxNowSeconds()
+    for key, inflightBucket in pairs(store.inflight) do
+        if type(inflightBucket) == "table" and #inflightBucket > 0 then
+            for i = #inflightBucket, 1, -1 do
+                local entry = inflightBucket[i]
+                local expiresAt = tonumber(entry and entry.expires_at)
+                if not expiresAt or now >= expiresAt then
+                    table.remove(inflightBucket, i)
+                    if type(entry) == "table" then
+                        enqueueMailboxEntry(store, key, entry)
+                        changed = true
+                    end
+                end
+            end
+        end
+    end
+
+    return changed
+end
+
+local function checkoutQueuedMessages(store, targetID)
+    local key = tostring(targetID)
+    local queuedBucket = store.queued[key] or {}
+    store.queued[key] = {}
+
+    local checkout = {}
+    for i = 1, #queuedBucket do
+        local entry = queuedBucket[i]
+        if type(entry) == "table" then
+            moveToInflight(store, targetID, entry)
+            checkout[#checkout + 1] = cloneShallowTable(entry)
+        end
+    end
+
+    return checkout
+end
+
+local function ackMailboxMessageInStore(store, targetID, messageID)
+    local key = tostring(targetID)
+
+    local inflightBucket = store.inflight[key]
+    local inflightEntry = removeMessageById(inflightBucket, messageID)
+    if inflightEntry then
+        return true, "acked_inflight"
+    end
+
+    local queuedBucket = store.queued[key]
+    local queuedEntry = removeMessageById(queuedBucket, messageID)
+    if queuedEntry then
+        return true, "acked_queued"
+    end
+
+    return false, "unknown_message"
+end
+
+local function countQueuedForTarget(store, targetID)
+    local key = tostring(targetID)
+    local queuedBucket = store.queued[key]
+    if type(queuedBucket) ~= "table" then
+        return 0
+    end
+    return #queuedBucket
+end
+
+local function decorateStatusPayloadForAck(payload, messageID, serverID, targetID)
+    local out = cloneShallowTable(payload)
+    out.mailbox_message_id = messageID
+    out.mailbox_server_id = serverID
+    out.mailbox_target_id = targetID
+    out.mailbox_ack_required = true
+    out.mailbox_protocol = MAILBOX_PROTOCOL
+    return out
+end
 
 local function loadMailboxStore()
     if not fs.exists(MAILBOX_STORE_FILE) then
@@ -1218,10 +1412,10 @@ local function loadMailboxStore()
 
     local parsed = textutils.unserialize(raw)
     if type(parsed) ~= "table" then
-        return {}
+        return ensureMailboxStoreShape({})
     end
 
-    return parsed
+    return ensureMailboxStoreShape(parsed)
 end
 
 local function saveMailboxStore(store)
@@ -1230,7 +1424,7 @@ local function saveMailboxStore(store)
         return false, "Failed to open mailbox store for writing"
     end
 
-    f.write(textutils.serialize(store or {}))
+    f.write(textutils.serialize(ensureMailboxStoreShape(store or {})))
     f.close()
     return true
 end
@@ -1240,17 +1434,18 @@ local function queuePayloadWithMailboxServer(targetID, payload, mailboxServerID,
         type = "store_status",
         target_id = targetID,
         payload = payload,
-        try_direct = (tryDirect ~= false)
+        try_direct = (tryDirect ~= false),
+        ack_timeout_s = MAILBOX_ACK_TIMEOUT_SECONDS
     }
 
     return runRednetTransaction(function(side)
         if mailboxServerID then
-            rednet.send(mailboxServerID, request, "turtle_mailbox")
+            rednet.send(mailboxServerID, request, MAILBOX_PROTOCOL)
         else
-            rednet.broadcast(request, "turtle_mailbox")
+            rednet.broadcast(request, MAILBOX_PROTOCOL)
         end
 
-        local sender, reply = rednet.receive("turtle_mailbox", 2.0)
+        local sender, reply = rednet.receive(MAILBOX_PROTOCOL, 2.0)
         if not sender then
             return false, "Mailbox server did not respond"
         end
@@ -1268,11 +1463,7 @@ local function queuePayloadWithMailboxServer(targetID, payload, mailboxServerID,
 end
 
 local function appendMailboxMessage(store, targetID, entry)
-    local key = tostring(targetID)
-    if type(store[key]) ~= "table" then
-        store[key] = {}
-    end
-    table.insert(store[key], entry)
+    enqueueMailboxEntry(ensureMailboxStoreShape(store), targetID, entry)
 end
 
 local function createStatusPayload(statusText, isError)
@@ -1328,12 +1519,12 @@ function tlib.pingMailbox(mailboxServerID)
 
     return runRednetTransaction(function(side)
         if mailboxServerID then
-            rednet.send(mailboxServerID, query, "turtle_mailbox")
+            rednet.send(mailboxServerID, query, MAILBOX_PROTOCOL)
         else
-            rednet.broadcast(query, "turtle_mailbox")
+            rednet.broadcast(query, MAILBOX_PROTOCOL)
         end
 
-        local sender, reply = rednet.receive("turtle_mailbox", 2.0)
+        local sender, reply = rednet.receive(MAILBOX_PROTOCOL, 2.0)
         if not sender then
             return false, "Mailbox server did not respond"
         end
@@ -1350,7 +1541,122 @@ function tlib.pingMailbox(mailboxServerID)
     end)
 end
 
-function tlib.checkOfflineMessages(mailboxServerID)
+function tlib.ackMailboxMessage(messageID, mailboxServerID, targetID)
+    if type(messageID) ~= "string" or messageID == "" then
+        return false, "messageID is required"
+    end
+
+    local ackTargetID = tonumber(targetID) or ((os and type(os.getComputerID) == "function") and os.getComputerID())
+    if not ackTargetID then
+        return false, "Unable to resolve target turtle ID for ACK"
+    end
+
+    local query = {
+        type = "ack_status",
+        turtle_id = ackTargetID,
+        message_id = messageID,
+        sender_id = (os and type(os.getComputerID) == "function") and os.getComputerID() or nil
+    }
+
+    return runRednetTransaction(function(side)
+        if mailboxServerID then
+            rednet.send(mailboxServerID, query, MAILBOX_PROTOCOL)
+        else
+            rednet.broadcast(query, MAILBOX_PROTOCOL)
+        end
+
+        local sender, reply = rednet.receive(MAILBOX_PROTOCOL, 2.0)
+        if not sender then
+            return false, "Mailbox server did not respond"
+        end
+
+        if type(reply) ~= "table" then
+            return false, "Mailbox server response was invalid"
+        end
+
+        if reply.ok then
+            return true, reply
+        end
+
+        return false, tostring(reply.error or "Mailbox ACK failed")
+    end)
+end
+
+-- Listens for one turtle_status message and optionally auto-ACKs mailbox envelopes
+-- after the caller's handler has successfully processed the payload.
+function tlib.listenStatus(options)
+    local opts = options
+    if type(opts) ~= "table" then
+        opts = {}
+    end
+
+    local timeout = tonumber(opts.timeout)
+    local protocol = type(opts.protocol) == "string" and opts.protocol or "turtle_status"
+    local autoAck = opts.autoAck ~= false
+    local onMessage = opts.onMessage
+
+    if onMessage ~= nil and type(onMessage) ~= "function" then
+        return false, "options.onMessage must be a function"
+    end
+
+    return runRednetTransaction(function(side)
+        local senderID, payload = rednet.receive(protocol, timeout)
+        if not senderID then
+            return true, {
+                received = false,
+                timeout = true
+            }
+        end
+
+        local handlerSuccess = true
+        local handlerResult = nil
+        if onMessage then
+            handlerSuccess, handlerResult = pcall(onMessage, payload, senderID)
+        end
+
+        local processed = handlerSuccess and handlerResult ~= false
+        local result = {
+            received = true,
+            sender_id = senderID,
+            payload = payload,
+            handler_ok = handlerSuccess,
+            handled = processed,
+            handler_result = handlerResult
+        }
+
+        if not handlerSuccess then
+            result.handler_error = tostring(handlerResult)
+        end
+
+        local isEnvelope = type(payload) == "table"
+            and payload.mailbox_ack_required == true
+            and type(payload.mailbox_message_id) == "string"
+            and payload.mailbox_message_id ~= ""
+
+        if autoAck and processed and isEnvelope then
+            local ackServerID = tonumber(opts.mailboxServerID) or tonumber(payload.mailbox_server_id)
+            local ackTargetID = tonumber(payload.mailbox_target_id) or os.getComputerID()
+            local ackOk, ackRet = tlib.ackMailboxMessage(payload.mailbox_message_id, ackServerID, ackTargetID)
+
+            result.ack_attempted = true
+            result.ack_ok = ackOk
+            if ackOk then
+                result.ack_reply = ackRet
+            else
+                result.ack_error = tostring(ackRet)
+            end
+        end
+
+        return true, result
+    end)
+end
+
+function tlib.checkOfflineMessages(mailboxServerID, options)
+    local opts = options
+    if type(opts) ~= "table" then
+        opts = {}
+    end
+
     local query = {
         type = "fetch_mailbox",
         turtle_id = os.getComputerID()
@@ -1358,17 +1664,31 @@ function tlib.checkOfflineMessages(mailboxServerID)
 
     local success, messages = runRednetTransaction(function(side)
         if mailboxServerID then
-            rednet.send(mailboxServerID, query, "turtle_mailbox")
+            rednet.send(mailboxServerID, query, MAILBOX_PROTOCOL)
         else
-            rednet.broadcast(query, "turtle_mailbox")
+            rednet.broadcast(query, MAILBOX_PROTOCOL)
         end
 
-        local sender, reply = rednet.receive("turtle_mailbox", 2.0)
+        local sender, reply = rednet.receive(MAILBOX_PROTOCOL, 2.0)
         if sender and type(reply) == "table" and (reply.type == "mailbox_messages" or reply.messages) then
             return reply.messages
         end
         return {}
     end)
+
+    if success and opts.autoAck ~= false and type(messages) == "table" then
+        for i = 1, #messages do
+            local msg = messages[i]
+            if type(msg) == "table" and type(msg.message_id) == "string" then
+                local targetID = tonumber(msg.target) or os.getComputerID()
+                local ackOk, ackRet = tlib.ackMailboxMessage(msg.message_id, mailboxServerID, targetID)
+                msg.ack_ok = ackOk
+                if not ackOk then
+                    msg.ack_error = tostring(ackRet)
+                end
+            end
+        end
+    end
 
     return success, messages
 end
@@ -1391,85 +1711,116 @@ function tlib.runMailboxServer()
 
     local ok, runErr = pcall(function()
         while true do
-            local senderID, request = rednet.receive("turtle_mailbox")
+            local changedBySweep = requeueExpiredInflight(store)
+            if changedBySweep then
+                saveMailboxStore(store)
+            end
+
+            local senderID, request = rednet.receive(MAILBOX_PROTOCOL, 0.5)
+            if not senderID then
+                -- Timeout keeps the loop progressing so in-flight expirations can be re-queued.
+                goto continue
+            end
+
             if type(request) ~= "table" then
-                rednet.send(senderID, { ok = false, error = "Invalid request payload" }, "turtle_mailbox")
+                rednet.send(senderID, { ok = false, error = "Invalid request payload" }, MAILBOX_PROTOCOL)
             elseif request.type == "store_status" then
                 local targetID = tonumber(request.target_id)
                 local payload = request.payload
 
                 if not targetID or type(payload) ~= "table" then
                     rednet.send(senderID, { ok = false, error = "store_status requires target_id and payload" },
-                        "turtle_mailbox")
+                        MAILBOX_PROTOCOL)
                 else
+                    store = ensureMailboxStoreShape(store)
+                    local entry = buildMailboxEntry(store, senderID, targetID, payload, request.ack_timeout_s)
                     local delivered = false
                     if request.try_direct ~= false then
-                        local sentOk, sentRet = pcall(rednet.send, targetID, payload, "turtle_status")
+                        local outbound = decorateStatusPayloadForAck(payload, entry.message_id, os.getComputerID(), targetID)
+                        local sentOk, sentRet = pcall(rednet.send, targetID, outbound, "turtle_status")
                         delivered = (sentOk and sentRet == true)
                     end
 
-                    if not delivered then
-                        appendMailboxMessage(store, targetID, {
-                            from = senderID,
-                            target = targetID,
-                            payload = payload,
-                            message = payload.status,
-                            is_error = payload.is_error,
-                            ts = os.epoch and os.epoch("utc") or os.clock()
-                        })
+                    if delivered then
+                        moveToInflight(store, targetID, entry)
+                    else
+                        appendMailboxMessage(store, targetID, entry)
+                    end
 
-                        local saved, saveErr = saveMailboxStore(store)
-                        if not saved then
-                            rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
-                                "turtle_mailbox")
-                        else
-                            local queuedCount = #store[tostring(targetID)]
-                            rednet.send(senderID, {
-                                ok = true,
-                                delivered = false,
-                                queued = true,
-                                queued_count = queuedCount
-                            }, "turtle_mailbox")
-                        end
+                    local saved, saveErr = saveMailboxStore(store)
+                    if not saved then
+                        rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
+                            MAILBOX_PROTOCOL)
                     else
                         rednet.send(senderID, {
                             ok = true,
-                            delivered = true,
-                            queued = false,
-                            queued_count = #(store[tostring(targetID)] or {})
-                        }, "turtle_mailbox")
+                            delivered = false,
+                            ack_pending = delivered,
+                            queued = not delivered,
+                            message_id = entry.message_id,
+                            queued_count = countQueuedForTarget(store, targetID)
+                        }, MAILBOX_PROTOCOL)
                     end
                 end
             elseif request.type == "fetch_mailbox" then
+                store = ensureMailboxStoreShape(store)
+                requeueExpiredInflight(store)
                 local turtleID = tonumber(request.turtle_id or senderID)
-                local key = tostring(turtleID)
-                local messages = store[key] or {}
-
-                store[key] = {}
+                local messages = checkoutQueuedMessages(store, turtleID)
                 local saved, saveErr = saveMailboxStore(store)
                 if not saved then
                     rednet.send(senderID, { ok = false, error = saveErr or "Failed to update mailbox" },
-                        "turtle_mailbox")
+                        MAILBOX_PROTOCOL)
                 else
                     rednet.send(senderID, {
                         ok = true,
                         type = "mailbox_messages",
                         turtle_id = turtleID,
                         messages = messages
-                    }, "turtle_mailbox")
+                    }, MAILBOX_PROTOCOL)
+                end
+            elseif request.type == "ack_status" then
+                store = ensureMailboxStoreShape(store)
+                local turtleID = tonumber(request.turtle_id or senderID)
+                local messageID = request.message_id
+
+                if not turtleID or type(messageID) ~= "string" or messageID == "" then
+                    rednet.send(senderID, {
+                        ok = false,
+                        error = "ack_status requires turtle_id and message_id"
+                    }, MAILBOX_PROTOCOL)
+                else
+                    local acked, ackReason = ackMailboxMessageInStore(store, turtleID, messageID)
+                    local saved, saveErr = saveMailboxStore(store)
+                    if not saved then
+                        rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
+                            MAILBOX_PROTOCOL)
+                    else
+                        rednet.send(senderID, {
+                            ok = acked,
+                            acked = acked,
+                            reason = ackReason,
+                            message_id = messageID,
+                            turtle_id = turtleID,
+                            queued_count = countQueuedForTarget(store, turtleID),
+                            error = acked and nil or "Message not found"
+                        }, MAILBOX_PROTOCOL)
+                    end
                 end
             elseif request.type == "ping" then
                 rednet.send(senderID, {
                     ok = true,
                     type = "pong",
                     server_id = os.getComputerID()
-                }, "turtle_mailbox")
+                }, MAILBOX_PROTOCOL)
             else
                 rednet.send(senderID, {
                     ok = false,
                     error = "Unknown request type: " .. tostring(request.type)
-                }, "turtle_mailbox")
+                }, MAILBOX_PROTOCOL)
             end
+
+            ::continue::
         end
     end)
 

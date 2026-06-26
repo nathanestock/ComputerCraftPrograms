@@ -30,6 +30,216 @@ end
 
 local MAILBOX_PROTOCOL = "turtle_mailbox"
 local MAILBOX_STORE_FILE = "turtle_mailbox_store.json"
+local MAILBOX_ACK_TIMEOUT_SECONDS = 5
+
+local function mailboxNowSeconds()
+    if type(epochFn) == "function" then
+        return math.floor(epochFn("utc") / 1000)
+    end
+    return math.floor(os.clock())
+end
+
+local function cloneShallowTable(value)
+    if type(value) ~= "table" then
+        return value
+    end
+
+    local out = {}
+    for k, v in pairs(value) do
+        out[k] = v
+    end
+    return out
+end
+
+local function ensureMailboxStoreShape(store)
+    if type(store) ~= "table" then
+        store = {}
+    end
+
+    local queued = store.queued
+    local inflight = store.inflight
+
+    if type(queued) ~= "table" or type(inflight) ~= "table" then
+        local migratedQueued = {}
+        for key, value in pairs(store) do
+            if type(key) == "string" and type(value) == "table" then
+                migratedQueued[key] = value
+            end
+        end
+
+        queued = migratedQueued
+        inflight = {}
+        store = {
+            queued = queued,
+            inflight = inflight,
+            sequence = tonumber(store.sequence) or 0
+        }
+        return store
+    end
+
+    store.queued = queued
+    store.inflight = inflight
+    store.sequence = tonumber(store.sequence) or 0
+    return store
+end
+
+local function ensureMailboxBucket(tbl, key)
+    if type(tbl[key]) ~= "table" then
+        tbl[key] = {}
+    end
+    return tbl[key]
+end
+
+local function removeMessageById(messages, messageID)
+    if type(messages) ~= "table" then
+        return nil
+    end
+
+    for i = #messages, 1, -1 do
+        local msg = messages[i]
+        if type(msg) == "table" and msg.message_id == messageID then
+            table.remove(messages, i)
+            return msg
+        end
+    end
+
+    return nil
+end
+
+local function nextMailboxMessageID(store, targetID)
+    store.sequence = (tonumber(store.sequence) or 0) + 1
+    return string.format("%s-%s-%s", tostring(currentComputerID()), tostring(mailboxNowSeconds()),
+        tostring(store.sequence))
+end
+
+local function buildMailboxEntry(store, senderID, targetID, payload, ackTimeout)
+    local timeout = tonumber(ackTimeout) or MAILBOX_ACK_TIMEOUT_SECONDS
+    if timeout < 1 then
+        timeout = MAILBOX_ACK_TIMEOUT_SECONDS
+    end
+
+    return {
+        message_id = nextMailboxMessageID(store, targetID),
+        from = senderID,
+        target = targetID,
+        payload = cloneShallowTable(payload),
+        message = payload and payload.status or nil,
+        is_error = payload and payload.is_error or false,
+        ts = mailboxNowSeconds(),
+        ack_timeout_s = timeout,
+        expires_at = nil
+    }
+end
+
+local function moveToInflight(store, targetID, entry)
+    local key = tostring(targetID)
+    local inflightBucket = ensureMailboxBucket(store.inflight, key)
+    entry.expires_at = mailboxNowSeconds() + (tonumber(entry.ack_timeout_s) or MAILBOX_ACK_TIMEOUT_SECONDS)
+    table.insert(inflightBucket, entry)
+end
+
+local function enqueueMailboxEntry(store, targetID, entry)
+    local key = tostring(targetID)
+    local queuedBucket = ensureMailboxBucket(store.queued, key)
+    entry.expires_at = nil
+    table.insert(queuedBucket, entry)
+end
+
+local function requeueExpiredInflight(store)
+    local changed = false
+    local now = mailboxNowSeconds()
+    for key, inflightBucket in pairs(store.inflight) do
+        if type(inflightBucket) == "table" and #inflightBucket > 0 then
+            for i = #inflightBucket, 1, -1 do
+                local entry = inflightBucket[i]
+                local expiresAt = tonumber(entry and entry.expires_at)
+                if not expiresAt or now >= expiresAt then
+                    table.remove(inflightBucket, i)
+                    if type(entry) == "table" then
+                        enqueueMailboxEntry(store, key, entry)
+                        changed = true
+                    end
+                end
+            end
+        end
+    end
+
+    return changed
+end
+
+local function checkoutQueuedMessages(store, targetID)
+    local key = tostring(targetID)
+    local queuedBucket = store.queued[key] or {}
+    store.queued[key] = {}
+
+    local checkout = {}
+    for i = 1, #queuedBucket do
+        local entry = queuedBucket[i]
+        if type(entry) == "table" then
+            moveToInflight(store, targetID, entry)
+            checkout[#checkout + 1] = cloneShallowTable(entry)
+        end
+    end
+
+    return checkout
+end
+
+local function ackMailboxMessageInStore(store, targetID, messageID)
+    local key = tostring(targetID)
+
+    local inflightBucket = store.inflight[key]
+    local inflightEntry = removeMessageById(inflightBucket, messageID)
+    if inflightEntry then
+        return true, "acked_inflight"
+    end
+
+    local queuedBucket = store.queued[key]
+    local queuedEntry = removeMessageById(queuedBucket, messageID)
+    if queuedEntry then
+        return true, "acked_queued"
+    end
+
+    return false, "unknown_message"
+end
+
+local function countQueuedForTarget(store, targetID)
+    local key = tostring(targetID)
+    local queuedBucket = store.queued[key]
+    if type(queuedBucket) ~= "table" then
+        return 0
+    end
+    return #queuedBucket
+end
+
+local function countInflightForTarget(store, targetID)
+    local key = tostring(targetID)
+    local inflightBucket = store.inflight[key]
+    if type(inflightBucket) ~= "table" then
+        return 0
+    end
+    return #inflightBucket
+end
+
+local function getTotalInflight(store)
+    local count = 0
+    local inflight = store.inflight or {}
+    for _, messages in pairs(inflight) do
+        if type(messages) == "table" then
+            count = count + #messages
+        end
+    end
+    return count
+end
+
+local function decorateStatusPayloadForAck(payload, messageID, serverID, targetID)
+    local out = cloneShallowTable(payload)
+    out.mailbox_message_id = messageID
+    out.mailbox_server_id = serverID
+    out.mailbox_target_id = targetID
+    out.mailbox_ack_required = true
+    out.mailbox_protocol = MAILBOX_PROTOCOL
+    return out
+end
 
 local function loadMailboxStore()
     if not fs.exists(MAILBOX_STORE_FILE) then
@@ -50,10 +260,10 @@ local function loadMailboxStore()
 
     local parsed = textutils.unserialize(raw)
     if type(parsed) ~= "table" then
-        return {}
+        return ensureMailboxStoreShape({})
     end
 
-    return parsed
+    return ensureMailboxStoreShape(parsed)
 end
 
 local function saveMailboxStore(store)
@@ -62,22 +272,19 @@ local function saveMailboxStore(store)
         return false, "Failed to open mailbox store for writing"
     end
 
-    f.write(textutils.serialize(store or {}))
+    f.write(textutils.serialize(ensureMailboxStoreShape(store or {})))
     f.close()
     return true
 end
 
 local function appendMailboxMessage(store, targetID, entry)
-    local key = tostring(targetID)
-    if type(store[key]) ~= "table" then
-        store[key] = {}
-    end
-    table.insert(store[key], entry)
+    enqueueMailboxEntry(ensureMailboxStoreShape(store), targetID, entry)
 end
 
 local function getTotalQueued(store)
     local count = 0
-    for _, messages in pairs(store) do
+    local queued = (type(store) == "table" and store.queued) or {}
+    for _, messages in pairs(queued) do
         if type(messages) == "table" then
             count = count + #messages
         end
@@ -163,9 +370,10 @@ local function renderMailboxUI(monitor, state, store)
     writeLine(monitor, 1, 6, string.format("Queued: %d", state.queuedCount), colors.yellow, colors.black)
     writeLine(monitor, 1, 7, string.format("Fetched: %d", state.fetchedCount), colors.cyan, colors.black)
     writeLine(monitor, 1, 8, string.format("In Queue: %d", getTotalQueued(store)), colors.orange, colors.black)
+    writeLine(monitor, 1, 9, string.format("In Flight: %d", getTotalInflight(store)), colors.lightBlue, colors.black)
 
-    writeLine(monitor, 1, 10, "Recent Activity:", colors.white, colors.black)
-    local row = 11
+    writeLine(monitor, 1, 11, "Recent Activity:", colors.white, colors.black)
+    local row = 12
     local maxRows = h - row + 1
     local start = math.max(1, #state.log - maxRows + 1)
     for i = start, #state.log do
@@ -226,6 +434,12 @@ local function runServerLoop()
     renderMailboxUI(monitor, state, store)
 
     while true do
+        store = ensureMailboxStoreShape(store)
+        local changedBySweep = requeueExpiredInflight(store)
+        if changedBySweep then
+            saveMailboxStore(store)
+        end
+
         local senderID, request = rednet.receive(MAILBOX_PROTOCOL, 0.5)
         if senderID then
             state.requestCount = state.requestCount + 1
@@ -242,56 +456,48 @@ local function runServerLoop()
                         MAILBOX_PROTOCOL)
                     addLog(state, "Bad store_status from " .. tostring(senderID))
                 else
+                    local entry = buildMailboxEntry(store, senderID, targetID, payload, request.ack_timeout_s)
                     local delivered = false
                     if request.try_direct ~= false then
-                        local sentOk, sentRet = pcall(rednet.send, targetID, payload, "turtle_status")
+                        local outbound = decorateStatusPayloadForAck(payload, entry.message_id, currentComputerID(),
+                            targetID)
+                        local sentOk, sentRet = pcall(rednet.send, targetID, outbound, "turtle_status")
                         delivered = (sentOk and sentRet == true)
                     end
 
                     if delivered then
-                        state.deliveredCount = state.deliveredCount + 1
+                        moveToInflight(store, targetID, entry)
+                        addLog(state,
+                            string.format("Direct sent %s -> %s (%s)", tostring(senderID), tostring(targetID),
+                                tostring(entry.message_id)))
+                    else
+                        appendMailboxMessage(store, targetID, entry)
+                        state.queuedCount = state.queuedCount + 1
+                        addLog(state,
+                            string.format("Queued for %s (%d pending)", tostring(targetID),
+                                countQueuedForTarget(store, targetID)))
+                    end
+
+                    local saved, saveErr = saveMailboxStore(store)
+                    if not saved then
+                        rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
+                            MAILBOX_PROTOCOL)
+                        addLog(state, "Store persist failed for target " .. tostring(targetID))
+                    else
                         rednet.send(senderID, {
                             ok = true,
-                            delivered = true,
-                            queued = false,
-                            queued_count = #(store[tostring(targetID)] or {})
+                            delivered = false,
+                            ack_pending = delivered,
+                            queued = not delivered,
+                            message_id = entry.message_id,
+                            queued_count = countQueuedForTarget(store, targetID),
+                            inflight_count = countInflightForTarget(store, targetID)
                         }, MAILBOX_PROTOCOL)
-                        addLog(state, string.format("Delivered %s -> %s", tostring(senderID), tostring(targetID)))
-                    else
-                        appendMailboxMessage(store, targetID, {
-                            from = senderID,
-                            target = targetID,
-                            payload = payload,
-                            message = payload.status,
-                            is_error = payload.is_error,
-                            ts = (type(epochFn) == "function" and epochFn("utc")) or os.clock()
-                        })
-
-                        local saved, saveErr = saveMailboxStore(store)
-                        if not saved then
-                            rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
-                                MAILBOX_PROTOCOL)
-                            addLog(state, "Queue persist failed for target " .. tostring(targetID))
-                        else
-                            state.queuedCount = state.queuedCount + 1
-                            local queuedCount = #store[tostring(targetID)]
-                            rednet.send(senderID, {
-                                ok = true,
-                                delivered = false,
-                                queued = true,
-                                queued_count = queuedCount
-                            }, MAILBOX_PROTOCOL)
-                            addLog(state,
-                                string.format("Queued for %s (%d pending)", tostring(targetID), queuedCount))
-                        end
                     end
                 end
             elseif request.type == "fetch_mailbox" then
                 local turtleID = tonumber(request.turtle_id or senderID)
-                local key = tostring(turtleID)
-                local messages = store[key] or {}
-
-                store[key] = {}
+                local messages = checkoutQueuedMessages(store, turtleID)
                 local saved, saveErr = saveMailboxStore(store)
                 if not saved then
                     rednet.send(senderID, { ok = false, error = saveErr or "Failed to update mailbox" },
@@ -306,6 +512,46 @@ local function runServerLoop()
                         messages = messages
                     }, MAILBOX_PROTOCOL)
                     addLog(state, string.format("Fetched %d for %s", #messages, tostring(turtleID)))
+                end
+            elseif request.type == "ack_status" then
+                local turtleID = tonumber(request.turtle_id or senderID)
+                local messageID = request.message_id
+
+                if not turtleID or type(messageID) ~= "string" or messageID == "" then
+                    rednet.send(senderID, {
+                        ok = false,
+                        error = "ack_status requires turtle_id and message_id"
+                    }, MAILBOX_PROTOCOL)
+                    addLog(state, "Bad ack_status from " .. tostring(senderID))
+                else
+                    local acked, reason = ackMailboxMessageInStore(store, turtleID, messageID)
+                    local saved, saveErr = saveMailboxStore(store)
+                    if not saved then
+                        rednet.send(senderID, { ok = false, error = saveErr or "Failed to persist mailbox" },
+                            MAILBOX_PROTOCOL)
+                        addLog(state, "ACK save failed for " .. tostring(turtleID))
+                    else
+                        if acked then
+                            state.deliveredCount = state.deliveredCount + 1
+                            addLog(state,
+                                string.format("ACK %s for %s (%s)", tostring(senderID), tostring(turtleID),
+                                    tostring(messageID)))
+                        else
+                            addLog(state,
+                                string.format("Unknown ACK %s for %s (%s)", tostring(senderID), tostring(turtleID),
+                                    tostring(messageID)))
+                        end
+                        rednet.send(senderID, {
+                            ok = acked,
+                            acked = acked,
+                            reason = reason,
+                            message_id = messageID,
+                            turtle_id = turtleID,
+                            queued_count = countQueuedForTarget(store, turtleID),
+                            inflight_count = countInflightForTarget(store, turtleID),
+                            error = acked and nil or "Message not found"
+                        }, MAILBOX_PROTOCOL)
+                    end
                 end
             elseif request.type == "ping" then
                 rednet.send(senderID, {
@@ -349,6 +595,8 @@ local function printUsage()
     print("  tlib_mailbox send_direct <targetId> <status text>")
     print("  tlib_mailbox send_direct_error <targetId> <status text>")
     print("  tlib_mailbox fetch [mailboxServerId]")
+    print("  tlib_mailbox fetch_noack [mailboxServerId]")
+    print("  tlib_mailbox ack <messageId> [serverId] [targetId]")
     print("  NOTE: ping/broadcast/send/fetch commands require tlib (turtle client)")
 end
 
@@ -376,7 +624,9 @@ local function printMessages(messages)
         if type(msg) == "table" then
             local from = tostring(msg.from or msg.sender or "unknown")
             local body = tostring(msg.message or msg.text or textutils.serialize(msg))
-            print(string.format("  [%d] from=%s msg=%s", i, from, body))
+            local messageID = tostring(msg.message_id or "n/a")
+            local ackState = msg.ack_ok == nil and "pending" or (msg.ack_ok and "acked" or "ack_failed")
+            print(string.format("  [%d] id=%s from=%s ack=%s msg=%s", i, messageID, from, ackState, body))
         else
             print(string.format("  [%d] %s", i, tostring(msg)))
         end
@@ -496,10 +746,18 @@ if cmd == "send" or cmd == "send_error" then
     local isError = (cmd == "send_error")
     local success, ret = lib.sendStatusViaMailbox(targetId, statusText, isError, mailboxServerID)
     if success then
-        if type(ret) == "table" and ret.delivered then
-            print("Status delivered directly to " .. tostring(targetId) .. ".")
+        if type(ret) == "table" and type(ret.message_id) == "string" then
+            if ret.queued then
+                print("Status queued for " .. tostring(targetId) .. " (message_id=" .. ret.message_id .. ").")
+            elseif ret.ack_pending then
+                print("Status sent to " .. tostring(targetId) .. " and awaiting ACK (message_id=" .. ret.message_id ..
+                    ").")
+            else
+                print("Status accepted by mailbox server for " .. tostring(targetId) .. " (message_id=" ..
+                    ret.message_id .. ").")
+            end
         else
-            print("Status queued for " .. tostring(targetId) .. ".")
+            print("Status accepted by mailbox server.")
         end
     else
         printError("Send failed: " .. tostring(ret))
@@ -535,18 +793,42 @@ if cmd == "send_direct" or cmd == "send_direct_error" then
     return
 end
 
-if cmd == "fetch" then
+if cmd == "fetch" or cmd == "fetch_noack" then
     if not requireTlib("fetch") then
         return
     end
 
     local lib = assert(tlib)
     local mailboxServerID = tonumber(args[2])
-    local success, messages = lib.checkOfflineMessages(mailboxServerID)
+    local options = { autoAck = (cmd ~= "fetch_noack") }
+    local success, messages = lib.checkOfflineMessages(mailboxServerID, options)
     if success then
         printMessages(messages)
     else
         printError("Fetch failed: " .. tostring(messages))
+    end
+    return
+end
+
+if cmd == "ack" then
+    if not requireTlib("ack") then
+        return
+    end
+
+    local lib = assert(tlib)
+    local messageID = tostring(args[2] or "")
+    if messageID == "" then
+        printError("messageId is required.")
+        return
+    end
+
+    local mailboxServerID = tonumber(args[3])
+    local targetID = tonumber(args[4])
+    local success, reply = lib.ackMailboxMessage(messageID, mailboxServerID, targetID)
+    if success then
+        print("ACK accepted for message_id=" .. tostring(messageID) .. ".")
+    else
+        printError("ACK failed: " .. tostring(reply))
     end
     return
 end

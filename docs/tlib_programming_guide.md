@@ -161,9 +161,46 @@ Programs that use location/comms SHOULD use:
 - tlib.calibrateGPS()
 - tlib.broadcastStatus(status, isError)
 - tlib.sendStatus(targetId, status, isError)
-- tlib.checkOfflineMessages(mailboxServerId)
+- tlib.checkOfflineMessages(mailboxServerId, options)
+- tlib.ackMailboxMessage(messageId, mailboxServerId, targetId)
+- tlib.listenStatus(options)
 
 These APIs use modem transaction handling and hardware constraints already encoded in tlib.
+
+Mailbox reliability behavior:
+
+- Mailbox-routed status messages use ACK tracking.
+- Server marks direct relays as in-flight until client ACK is received.
+- If ACK is not received within 5 seconds, message is re-queued.
+- `checkOfflineMessages(..., { autoAck = true })` (default) ACKs fetched messages automatically.
+- Use `checkOfflineMessages(..., { autoAck = false })` when you need manual ACK control, then call `ackMailboxMessage(...)`.
+- `listenStatus({ onMessage = fn })` lets receiver programs process direct `turtle_status` messages and auto-ACK mailbox envelopes only after `fn` succeeds.
+
+Example listener usage:
+
+```lua
+local tlib = require("tlib")
+
+while true do
+    local ok, event = tlib.listenStatus({
+        timeout = 2,
+        onMessage = function(payload, senderId)
+            if type(payload) == "table" then
+                print(string.format("status from %s: %s", tostring(senderId), tostring(payload.status)))
+            else
+                print(string.format("status from %s", tostring(senderId)))
+            end
+
+            -- Return false to suppress ACK when business logic rejects the message.
+            return true
+        end
+    })
+
+    if not ok then
+        printError("listenStatus failed: " .. tostring(event))
+    end
+end
+```
 
 ## 6. Reboot Checkpoint Pattern (Required)
 
