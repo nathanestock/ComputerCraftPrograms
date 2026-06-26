@@ -276,11 +276,29 @@ local function runEntangloporterRefuelStrategy(options)
 
         if placed then
             turtle.select(entangloporterSlot or selectedBefore)
-            ops.dig()
+            local dug = false
+            local lastErr = nil
+            for _ = 1, 3 do
+                local ok, err = ops.dig()
+                if ok then
+                    dug = true
+                    placed = false
+                    break
+                end
+                lastErr = err
+                sleep(0.1)
+            end
+
+            if not dug then
+                turtle.select(selectedBefore)
+                tlib.scanInventory()
+                return false, "cleanup_failed: could not recover entangloporter (" .. tostring(lastErr) .. ")"
+            end
         end
 
         turtle.select(selectedBefore)
         tlib.scanInventory()
+        return true
     end
 
     local found, slotOrErr = tlib.selectItem(cfg.entangloporterItem)
@@ -307,13 +325,19 @@ local function runEntangloporterRefuelStrategy(options)
     end
 
     if not peripheralObj then
-        cleanup()
+        local cleaned, cleanupErr = cleanup()
+        if not cleaned then
+            return false, cleanupErr
+        end
         return false, "Failed to wrap entangloporter peripheral on " .. ops.sideName
     end
 
     local configOk, configErr = configureEntangloporterForFuel(peripheralObj, cfg.entangloporterFrequency)
     if not configOk then
-        cleanup()
+        local cleaned, cleanupErr = cleanup()
+        if not cleaned then
+            return false, cleanupErr
+        end
         return false, configErr
     end
 
@@ -321,13 +345,19 @@ local function runEntangloporterRefuelStrategy(options)
     while getFuelLevelNumber() < targetFuel and cycles < cfg.maxCycles do
         if cfg.requireBufferItem then
             if type(peripheralObj.getBufferItem) ~= "function" then
-                cleanup()
+                local cleaned, cleanupErr = cleanup()
+                if not cleaned then
+                    return false, cleanupErr
+                end
                 return false, "Entangloporter missing getBufferItem()"
             end
 
             local ok, bufferItem = pcall(peripheralObj.getBufferItem)
             if not ok then
-                cleanup()
+                local cleaned, cleanupErr = cleanup()
+                if not cleaned then
+                    return false, cleanupErr
+                end
                 return false, "getBufferItem() failed: " .. tostring(bufferItem)
             end
 
@@ -353,7 +383,10 @@ local function runEntangloporterRefuelStrategy(options)
     end
 
     local success = getFuelLevelNumber() >= targetFuel
-    cleanup()
+    local cleaned, cleanupErr = cleanup()
+    if not cleaned then
+        return false, cleanupErr
+    end
 
     if success then
         return true, "entangloporter_refuel_success"
@@ -708,6 +741,10 @@ function tlib.refuel(options)
     end
 
     if strategyName ~= "inventory_scan" and merged.allowFallback ~= false then
+        if type(reason) == "string" and reason:find("^cleanup_failed:") then
+            return false, reason
+        end
+
         local fallbackDefaults = state.refuelStrategies.inventory_scan or {}
         local fallbackOptions = mergeOptions(fallbackDefaults, merged)
         fallbackOptions.targetFuel = merged.targetFuel
