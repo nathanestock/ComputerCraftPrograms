@@ -1830,7 +1830,29 @@ end
 -- =============================================================================
 
 local args = { ... }
-if args[1] == "install" or args[1] == "-i" then
+if args[1] == "install_digital_mining_manager" or args[1] == "-idmm" then
+    local startupContent = [[local ok, err = pcall(function()
+    local sh = shell or _G.shell
+    if sh then
+        sh.run("digital_mining_manager")
+    else
+        os.run({}, "digital_mining_manager")
+    end
+end)
+
+if not ok then
+    printError("Failed to launch digital_mining_manager: " .. tostring(err))
+end]]
+
+    local f = fs.open("startup.lua", "w")
+    if f then
+        f.write(startupContent)
+        f.close()
+        print("startup.lua installed for digital_mining_manager.")
+    else
+        printError("Failed to write startup.lua.")
+    end
+elseif args[1] == "install" or args[1] == "-i" then
     local startupContent = [[local ok, tlib = pcall(require, "tlib")
 if ok then
     tlib.startup()
