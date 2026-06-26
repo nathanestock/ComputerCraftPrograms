@@ -50,6 +50,12 @@ if not hasTurtle then
     }
 end
 
+local dependencies = {
+    "tlib",
+    "plib",
+    "nlib",
+}
+
 local programs = {
     "test",
     "digital_mining",
@@ -1661,10 +1667,8 @@ function tlib.showUI()
             term.redirect(dashboardWin)
             return
         end
-
-        local targets = { "tlib", "plib" }
         for i = 1, #programs do
-            table.insert(targets, programs[i])
+            table.insert(dependencies, programs[i])
         end
 
         local okCount = 0
