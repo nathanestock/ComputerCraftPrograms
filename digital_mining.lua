@@ -1,5 +1,16 @@
 local tlib                     = require("tlib")
 local plib                     = require("plib")
+local nlib                     = require("nlib")
+
+local fs                       = rawget(_G, "fs")
+local textutils                = rawget(_G, "textutils")
+local rednet                   = rawget(_G, "rednet")
+local ccWrite                  = rawget(_G, "write") or function(msg) print(tostring(msg or "")) end
+local ccRead                   = rawget(_G, "read") or function() return nil end
+local epochFn                  = os and rawget(os, "epoch")
+
+local getComputerIDFn          = (os and rawget(os, "getComputerID")) or rawget(_G, "getComputerID")
+local getComputerLabelFn       = (os and rawget(os, "getComputerLabel")) or rawget(_G, "getComputerLabel")
 
 -- =============================================================================
 -- Cached Globals
@@ -9,6 +20,8 @@ local ccSleep                  = rawget(_G, "sleep") or function(_) end
 local PERIPHERAL_CONNECT_DELAY = 1
 local ENTANGLOPORTER_FREQ      = "digital_miners"
 local ENTANGLOPORTER_REFUEL_FREQ = "lava_buckets"
+local DISCOVERY_PROTOCOL       = "digital_mining_discovery"
+local WORKER_CONFIG_FILE       = "digital_mining_worker_config.json"
 
 -- =============================================================================
 -- State Setup
@@ -17,7 +30,7 @@ tlib.load()
 local task = tlib.getTaskState() or {}
 
 task.digitalMining = task.digitalMining or {
-    version         = 1,
+    version         = 2,
     phase           = "boot",
     transporterStep = 0,     -- 0–5: how many transporter placements completed
     teardownStep    = 0,     -- step tracker for transporter teardown sequence
@@ -27,10 +40,25 @@ task.digitalMining = task.digitalMining or {
     rebootRequested = false,
     rebootVerified  = false,
     completed       = false,
+    serviceMode     = true,
+    activeTask      = nil,
+    currentSettings = nil,
+    currentFilters  = nil,
+    managerLabel    = nil,
+    managerProtocol = nil,
     updatedAt       = os.time()
 }
 
 local p = task.digitalMining
+
+if tonumber(p.version or 1) < 2 then
+    p.version = 2
+    p.phase = "boot"
+    p.serviceMode = true
+    p.activeTask = nil
+    p.currentSettings = nil
+    p.currentFilters = nil
+end
 
 -- =============================================================================
 -- Phase Helpers
@@ -68,6 +96,119 @@ local function countItem(pattern)
     return total
 end
 
+local function nowSeconds()
+    if type(epochFn) == "function" then
+        return math.floor(epochFn("utc") / 1000)
+    end
+    return math.floor(os.clock())
+end
+
+local function computerID()
+    if type(getComputerIDFn) == "function" then
+        return tonumber(getComputerIDFn()) or -1
+    end
+    return -1
+end
+
+local function computerLabel()
+    if type(getComputerLabelFn) == "function" then
+        return tostring(getComputerLabelFn() or ("worker_" .. tostring(computerID())))
+    end
+    return "worker_" .. tostring(computerID())
+end
+
+local function readWorkerConfig()
+    if not fs or not fs.exists or not fs.exists(WORKER_CONFIG_FILE) then
+        return {}
+    end
+
+    local file = fs.open(WORKER_CONFIG_FILE, "r")
+    if not file then
+        return {}
+    end
+
+    local raw = file.readAll() or ""
+    file.close()
+
+    local parsed = nil
+    if textutils and textutils.unserializeJSON then
+        parsed = textutils.unserializeJSON(raw)
+    end
+    if type(parsed) ~= "table" and textutils and textutils.unserialize then
+        parsed = textutils.unserialize(raw)
+    end
+    if type(parsed) ~= "table" then
+        return {}
+    end
+
+    return parsed
+end
+
+local function writeWorkerConfig(config)
+    if not fs or not fs.open then
+        return false, "filesystem unavailable"
+    end
+
+    local file = fs.open(WORKER_CONFIG_FILE, "w")
+    if not file then
+        return false, "unable to open config for writing"
+    end
+
+    local serialized = nil
+    if textutils and textutils.serializeJSON then
+        serialized = textutils.serializeJSON(config)
+    end
+    if not serialized and textutils and textutils.serialize then
+        serialized = textutils.serialize(config)
+    end
+    if not serialized then
+        file.close()
+        return false, "serializer unavailable"
+    end
+
+    file.write(serialized)
+    file.close()
+    return true
+end
+
+local function normalizeFilterList(filters)
+    if type(filters) ~= "table" then
+        return {
+            {
+                ["type"] = "MINER_TAG_FILTER",
+                ["tag"] = "*:ores"
+            }
+        }
+    end
+
+    if #filters > 0 then
+        return filters
+    end
+
+    -- Accept a single filter map and normalize it to an array.
+    if filters.type then
+        return { filters }
+    end
+
+    return {
+        {
+            ["type"] = "MINER_TAG_FILTER",
+            ["tag"] = "*:ores"
+        }
+    }
+end
+
+local function normalizeSettings(settings)
+    settings = type(settings) == "table" and settings or {}
+    return {
+        autoEject = settings.autoEject ~= false,
+        silkTouch = settings.silkTouch ~= false,
+        maxY = tonumber(settings.maxY) or 319,
+        minY = tonumber(settings.minY) or -64,
+        radius = tonumber(settings.radius) or 32
+    }
+end
+
 -- =============================================================================
 -- Peripheral Setup Stubs
 -- =============================================================================
@@ -89,7 +230,7 @@ local function setupEntangloporter(periph)
     print("Entangloporter configured: ENERGY/FRONT=OUTPUT, ITEM/TOP=INPUT, ENERGY ejecting enabled")
 end
 
-local function setupMiner(periph)
+local function setupMiner(periph, settings, filters)
     if not periph then
         error("setupMiner: Missing digital miner peripheral")
     end
@@ -113,11 +254,14 @@ local function setupMiner(periph)
         error("setupMiner: Peripheral missing addFilter()")
     end
 
-    periph.setAutoEject(true)
-    periph.setSilkTouch(true)
-    periph.setMaxY(319)
-    periph.setMinY(-64)
-    periph.setRadius(32)
+    local cfg = normalizeSettings(settings)
+    local filterList = normalizeFilterList(filters)
+
+    periph.setAutoEject(cfg.autoEject)
+    periph.setSilkTouch(cfg.silkTouch)
+    periph.setMaxY(cfg.maxY)
+    periph.setMinY(cfg.minY)
+    periph.setRadius(cfg.radius)
 
     periph.reset()
 
@@ -132,17 +276,285 @@ local function setupMiner(periph)
         end
     end
 
-    local filter = {
-        ["type"] = "MINER_TAG_FILTER",
-        ["tag"] = "*:ores"
-    }
-
-    local success, err = periph.addFilter(filter)
-    if not success then
-        error("setupMiner: Failed to add filter: " .. tostring(err))
+    for index, filter in ipairs(filterList) do
+        local success, err = periph.addFilter(filter)
+        if not success then
+            error("setupMiner: Failed to add filter #" .. tostring(index) .. ": " .. tostring(err))
+        end
     end
 
-    print("Digital miner configured: autoEject=true, silkTouch=true, y=[-64,319], radius=32, filter=*ores")
+    print(string.format(
+        "Digital miner configured: autoEject=%s, silkTouch=%s, y=[%d,%d], radius=%d, filters=%d",
+        tostring(cfg.autoEject), tostring(cfg.silkTouch), cfg.minY, cfg.maxY, cfg.radius, #filterList
+    ))
+end
+
+local function chunkOriginFromCoordinate(value)
+    local n = math.floor(tonumber(value) or 0)
+    local remainder = ((n % 16) + 16) % 16
+    return n - remainder
+end
+
+local function normalizeTaskLocation(taskPayload)
+    local requestedX = tonumber(taskPayload and taskPayload.x) or 0
+    local requestedZ = tonumber(taskPayload and taskPayload.z) or 0
+    local originX = chunkOriginFromCoordinate(requestedX)
+    local originZ = chunkOriginFromCoordinate(requestedZ)
+
+    return {
+        requestedX = requestedX,
+        requestedZ = requestedZ,
+        chunkOriginX = originX,
+        chunkOriginZ = originZ,
+        turtleTargetX = originX + 3,
+        turtleTargetZ = originZ + 3
+    }
+end
+
+local function rotateToFacing(targetFacing)
+    local _, _, _, facing = tlib.getPosition()
+    local current = facing % 4
+    local target = (tonumber(targetFacing) or 0) % 4
+    local delta = (target - current) % 4
+
+    if delta == 0 then
+        return
+    end
+
+    if delta == 1 then
+        tlib.turnRight()
+    elseif delta == 2 then
+        tlib.turnRight()
+        tlib.turnRight()
+    elseif delta == 3 then
+        tlib.turnLeft()
+    end
+end
+
+local function moveAlongX(targetX)
+    local x = tlib.getPosition()
+    while x ~= targetX do
+        if x < targetX then
+            rotateToFacing(1)
+        else
+            rotateToFacing(3)
+        end
+        mv(tlib.forward, "travel_to_target: moveAlongX")
+        x = tlib.getPosition()
+    end
+end
+
+local function moveAlongZ(targetZ)
+    local _, _, z = tlib.getPosition()
+    while z ~= targetZ do
+        if z < targetZ then
+            rotateToFacing(2)
+        else
+            rotateToFacing(0)
+        end
+        mv(tlib.forward, "travel_to_target: moveAlongZ")
+        _, _, z = tlib.getPosition()
+    end
+end
+
+local function moveToTaskLocation(location)
+    if not location then
+        error("moveToTaskLocation: missing location")
+    end
+
+    print(string.format(
+        "Travel target chunk origin (%d, %d), turtle target (%d, %d)",
+        location.chunkOriginX,
+        location.chunkOriginZ,
+        location.turtleTargetX,
+        location.turtleTargetZ
+    ))
+
+    moveAlongX(location.turtleTargetX)
+    moveAlongZ(location.turtleTargetZ)
+end
+
+local function sendWorkerMessage(managerID, managerProtocol, messageType, body)
+    local payload = {
+        messageType = messageType,
+        protocolVersion = 1,
+        workerId = computerID(),
+        workerLabel = computerLabel(),
+        sentAt = nowSeconds(),
+        body = body or {}
+    }
+
+    return nlib.send(managerID, payload, managerProtocol)
+end
+
+local function resolveManagerSelection()
+    local config = readWorkerConfig()
+    local managerLabel = config.managerLabel
+    local managerProtocol = config.managerProtocol
+
+    if type(managerLabel) == "string" and managerLabel ~= "" and type(managerProtocol) == "string" and managerProtocol ~= "" then
+        p.managerLabel = managerLabel
+        p.managerProtocol = managerProtocol
+        saveTask()
+        return managerLabel, managerProtocol
+    end
+
+    local ok, err = nlib.open()
+    if not ok then
+        error("resolveManagerSelection: failed to open rednet modem: " .. tostring(err))
+    end
+
+    print("No manager configured. Discovering digital mining managers...")
+    nlib.broadcast({
+        messageType = "discover_manager",
+        workerId = computerID(),
+        workerLabel = computerLabel(),
+        sentAt = nowSeconds()
+    }, DISCOVERY_PROTOCOL)
+
+    local candidates = {}
+    local started = nowSeconds()
+    while nowSeconds() - started < 3 do
+        local got, resp = nlib.receive(DISCOVERY_PROTOCOL, 0.75)
+        if got and resp and type(resp.payload) == "table" then
+            local payload = resp.payload
+            if payload.messageType == "manager_announce" and type(payload.managerLabel) == "string" then
+                local protocol = tostring(payload.managerProtocol or ("digital_mining_" .. payload.managerLabel))
+                candidates[#candidates + 1] = {
+                    managerLabel = payload.managerLabel,
+                    managerProtocol = protocol,
+                    managerID = resp.sender_id
+                }
+            end
+        end
+    end
+
+    if #candidates == 0 then
+        error("No digital mining manager discovered. Start digital_mining_manager and retry.")
+    end
+
+    print("Select manager host:")
+    for i = 1, #candidates do
+        local c = candidates[i]
+        print(string.format("[%d] %s (id=%s protocol=%s)", i, c.managerLabel, tostring(c.managerID), c.managerProtocol))
+    end
+
+    ccWrite("Selection [1-" .. tostring(#candidates) .. "]> ")
+    local choice = tonumber(ccRead())
+    if not choice or choice < 1 or choice > #candidates then
+        error("Invalid manager selection")
+    end
+
+    local selected = candidates[choice]
+    config.managerLabel = selected.managerLabel
+    config.managerProtocol = selected.managerProtocol
+
+    local saved, saveErr = writeWorkerConfig(config)
+    if not saved then
+        error("Failed to save worker config: " .. tostring(saveErr))
+    end
+
+    p.managerLabel = selected.managerLabel
+    p.managerProtocol = selected.managerProtocol
+    saveTask()
+
+    print(string.format("Manager configured: %s (%s)", selected.managerLabel, selected.managerProtocol))
+    return selected.managerLabel, selected.managerProtocol
+end
+
+local function requestTaskFromManager()
+    local managerLabel, managerProtocol = resolveManagerSelection()
+    local managerID = nlib.lookup(managerProtocol, managerLabel)
+    if not managerID then
+        error("requestTaskFromManager: manager host unavailable for protocol " .. managerProtocol)
+    end
+
+    local okSend, sendErr = sendWorkerMessage(managerID, managerProtocol, "task_request", {
+        position = {
+            x = select(1, tlib.getPosition()),
+            y = select(2, tlib.getPosition()),
+            z = select(3, tlib.getPosition())
+        },
+        phase = p.phase
+    })
+    if not okSend then
+        error("requestTaskFromManager: failed to send task request: " .. tostring(sendErr))
+    end
+
+    while true do
+        local recvOk, recvRet = nlib.receive(managerProtocol, 5)
+        if not recvOk then
+            error("requestTaskFromManager: receive failed: " .. tostring(recvRet))
+        end
+
+        local senderID = recvRet and recvRet.sender_id
+        local payload = recvRet and recvRet.payload
+        if senderID == managerID and type(payload) == "table" and payload.messageType == "task_offer" then
+            if type(payload.body) ~= "table" then
+                error("requestTaskFromManager: invalid task offer body")
+            end
+
+            local taskPayload = payload.body
+            local location = normalizeTaskLocation(taskPayload.location or {})
+            local settings = normalizeSettings(taskPayload.settings)
+            local filters = normalizeFilterList(taskPayload.filters)
+
+            p.activeTask = {
+                id = taskPayload.taskId,
+                requestedX = location.requestedX,
+                requestedZ = location.requestedZ,
+                chunkOriginX = location.chunkOriginX,
+                chunkOriginZ = location.chunkOriginZ,
+                turtleTargetX = location.turtleTargetX,
+                turtleTargetZ = location.turtleTargetZ,
+                presetName = taskPayload.presetName,
+                assignedAt = nowSeconds()
+            }
+            p.currentSettings = settings
+            p.currentFilters = filters
+            p.phase = "travel_to_task"
+            saveTask()
+
+            sendWorkerMessage(managerID, managerProtocol, "task_accept", {
+                taskId = taskPayload.taskId,
+                turtleTargetX = location.turtleTargetX,
+                turtleTargetZ = location.turtleTargetZ,
+                chunkOriginX = location.chunkOriginX,
+                chunkOriginZ = location.chunkOriginZ
+            })
+
+            return managerID, managerProtocol
+        end
+    end
+end
+
+local function reportTaskComplete(managerID, managerProtocol)
+    if not p.activeTask then
+        return
+    end
+
+    sendWorkerMessage(managerID, managerProtocol, "task_complete", {
+        taskId = p.activeTask.id,
+        finishedAt = nowSeconds(),
+        location = {
+            requestedX = p.activeTask.requestedX,
+            requestedZ = p.activeTask.requestedZ,
+            chunkOriginX = p.activeTask.chunkOriginX,
+            chunkOriginZ = p.activeTask.chunkOriginZ,
+            turtleTargetX = p.activeTask.turtleTargetX,
+            turtleTargetZ = p.activeTask.turtleTargetZ
+        },
+        settings = p.currentSettings,
+        filters = p.currentFilters,
+        monitorChecks = p.monitorChecks
+    })
+end
+
+local function resetTaskRuntimeState()
+    p.transporterStep = 0
+    p.teardownStep = 0
+    p.monitorChecks = 0
+    p.completed = false
 end
 
 -- =============================================================================
@@ -176,6 +588,46 @@ local function run()
 
         local x, y, z, facing = tlib.getPosition()
         p.homePos = { x = x, y = y, z = z, facing = facing }
+        resetTaskRuntimeState()
+        saveTask()
+
+        print(string.format("Worker initialized at (%d, %d, %d) facing %d", x, y, z, facing))
+        setPhase("await_task")
+    end
+
+    -- -------------------------------------------------------------------------
+    -- await_task: request work from manager and persist assignment
+    -- -------------------------------------------------------------------------
+    if p.phase == "await_task" then
+        print("Requesting mining task from manager...")
+
+        local managerID, managerProtocol = requestTaskFromManager()
+        sendWorkerMessage(managerID, managerProtocol, "task_start", {
+            taskId = p.activeTask and p.activeTask.id,
+            phase = "travel_to_task"
+        })
+    end
+
+    -- -------------------------------------------------------------------------
+    -- travel_to_task: move to chunk-aligned dispatch target (origin+3,+3)
+    -- -------------------------------------------------------------------------
+    if p.phase == "travel_to_task" then
+        if not p.activeTask then
+            error("travel_to_task: missing active task")
+        end
+
+        resetTaskRuntimeState()
+        saveTask()
+
+        moveToTaskLocation({
+            chunkOriginX = p.activeTask.chunkOriginX,
+            chunkOriginZ = p.activeTask.chunkOriginZ,
+            turtleTargetX = p.activeTask.turtleTargetX,
+            turtleTargetZ = p.activeTask.turtleTargetZ
+        })
+
+        local x, y, z, facing = tlib.getPosition()
+        p.homePos = { x = x, y = y, z = z, facing = facing }
         saveTask()
 
         tlib.scanInventory()
@@ -184,19 +636,18 @@ local function run()
         local entangloporterCount = countItem("quantum_entangloporter")
 
         if minerCount < 1 then
-            error("Boot: Missing Digital Miner (found " .. minerCount .. ")")
+            error("Task start: Missing Digital Miner (found " .. minerCount .. ")")
         end
         if transporterCount < 5 then
-            error("Boot: Need 5 Ultimate Logistical Transporters (found " .. transporterCount .. ")")
+            error("Task start: Need 5 Ultimate Logistical Transporters (found " .. transporterCount .. ")")
         end
         if entangloporterCount < 1 then
-            error("Boot: Missing Quantum Entangloporter (found " .. entangloporterCount .. ")")
+            error("Task start: Missing Quantum Entangloporter (found " .. entangloporterCount .. ")")
         end
-        if not tlib.ensureFuel(40) then
-            error("Boot: Insufficient fuel for operation")
+        if not tlib.ensureFuel(80) then
+            error("Task start: Insufficient fuel for operation")
         end
 
-        print(string.format("Inventory OK. Home: (%d, %d, %d) facing %d", x, y, z, facing))
         setPhase("place_miner")
     end
 
@@ -331,7 +782,7 @@ local function run()
             error("setup_miner: Could not wrap digital miner as peripheral")
         end
 
-        setupMiner(periph)
+        setupMiner(periph, p.currentSettings, p.currentFilters)
         setPhase("monitor")
     end
 
@@ -507,9 +958,19 @@ local function run()
     -- -------------------------------------------------------------------------
     if p.phase == "finalize" then
         p.completed = true
+        local managerLabel, managerProtocol = resolveManagerSelection()
+        local managerID = nlib.lookup(managerProtocol, managerLabel)
+        if managerID then
+            reportTaskComplete(managerID, managerProtocol)
+        end
+
+        p.activeTask = nil
+        p.currentSettings = nil
+        p.currentFilters = nil
+        resetTaskRuntimeState()
+        p.phase = "await_task"
         saveTask()
-        print("Digital mining operation complete. All items recovered.")
-        tlib.completeProgram(false)
+        print("Digital mining task complete. Waiting for next assignment.")
     end
 end
 
