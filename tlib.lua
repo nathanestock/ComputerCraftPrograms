@@ -1667,6 +1667,13 @@ function tlib.showUI()
             term.redirect(dashboardWin)
             return
         end
+
+        local targets = {}
+
+        for i = 1, #dependencies do
+            table.insert(targets, dependencies[i])
+        end
+
         for i = 1, #programs do
             table.insert(dependencies, programs[i])
         end
