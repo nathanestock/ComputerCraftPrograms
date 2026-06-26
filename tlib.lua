@@ -27,10 +27,344 @@ local state = {
     inventory = {},      -- Cache structure: [slot] = { name = "minecraft:coal", count = 64 }
     gpsAvailable = false,
     hasWireless = false,
-    hasChunkLoader = false
+    hasChunkLoader = false,
+    refuelStrategy = "inventory_scan",
+    refuelStrategies = {}
 }
 
 local STATE_FILE = "turtle_state.json"
+
+local REFUEL_SIDE_MAP = {
+    front = {
+        place = turtle.place,
+        suck = turtle.suck,
+        drop = turtle.drop,
+        dig = turtle.dig,
+        sideName = "front",
+        entangloporterSide = "FRONT"
+    },
+    up = {
+        place = turtle.placeUp,
+        suck = turtle.suckUp,
+        drop = turtle.dropUp,
+        dig = turtle.digUp,
+        sideName = "top",
+        entangloporterSide = "BOTTOM"
+    },
+    down = {
+        place = turtle.placeDown,
+        suck = turtle.suckDown,
+        drop = turtle.dropDown,
+        dig = turtle.digDown,
+        sideName = "bottom",
+        entangloporterSide = "TOP"
+    }
+}
+
+local refuelStrategies = {}
+
+local function cloneTable(value)
+    if type(value) ~= "table" then
+        return value
+    end
+
+    local copy = {}
+    for k, v in pairs(value) do
+        if type(v) == "table" then
+            copy[k] = cloneTable(v)
+        else
+            copy[k] = v
+        end
+    end
+
+    return copy
+end
+
+local function mergeOptions(defaults, overrides)
+    local merged = {}
+    for k, v in pairs(defaults or {}) do
+        merged[k] = (type(v) == "table") and cloneTable(v) or v
+    end
+    for k, v in pairs(overrides or {}) do
+        merged[k] = (type(v) == "table") and cloneTable(v) or v
+    end
+    return merged
+end
+
+local function ensureStateDefaults()
+    if type(state.taskState) ~= "table" then
+        state.taskState = {}
+    end
+
+    if type(state.inventory) ~= "table" then
+        state.inventory = {}
+    end
+
+    if type(state.refuelStrategies) ~= "table" then
+        state.refuelStrategies = {}
+    end
+
+    if type(state.refuelStrategy) ~= "string" or state.refuelStrategy == "" then
+        state.refuelStrategy = "inventory_scan"
+    end
+end
+
+local function getFuelLevelNumber()
+    local level = turtle.getFuelLevel()
+    if level == "unlimited" then
+        return math.huge
+    end
+    return level or 0
+end
+
+local function getFuelTarget(options)
+    local needed = tonumber(options and options.needed) or 1
+    if needed < 1 then needed = 1 end
+    return getFuelLevelNumber() + needed
+end
+
+local function snapshotInventory()
+    local snapshot = {}
+    for slot = 1, 16 do
+        local detail = turtle.getItemDetail(slot)
+        if detail then
+            snapshot[slot] = { name = detail.name, count = detail.count }
+        end
+    end
+    return snapshot
+end
+
+local function shouldReturnItem(detail, options)
+    if not detail or not detail.name then
+        return false
+    end
+
+    local returnPatterns = options.returnPatterns or { "bucket", options.fuelItemPattern }
+    for _, pattern in ipairs(returnPatterns) do
+        if type(pattern) == "string" and pattern ~= "" and detail.name:find(pattern, 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function registerRefuelStrategy(name, handler)
+    refuelStrategies[name] = handler
+end
+
+local function runInventoryRefuelStrategy(options)
+    local targetFuel = tonumber(options.targetFuel) or getFuelTarget(options)
+    local selectedBefore = turtle.getSelectedSlot()
+
+    for slot = 1, 16 do
+        turtle.select(slot)
+        if turtle.refuel(0) then
+            turtle.refuel()
+
+            local detail = turtle.getItemDetail(slot)
+            if detail then
+                state.inventory[slot] = { name = detail.name, count = detail.count }
+            else
+                state.inventory[slot] = nil
+            end
+
+            if getFuelLevelNumber() >= targetFuel then
+                turtle.select(selectedBefore)
+                tlib.save()
+                return true, "inventory_scan_success"
+            end
+        end
+    end
+
+    turtle.select(selectedBefore)
+    tlib.save()
+    return false, "No consumable fuel found in inventory"
+end
+
+local function configureEntangloporterForFuel(peripheralObj, sideKey)
+    if type(peripheralObj) ~= "table" then
+        return false, "Invalid entangloporter peripheral"
+    end
+
+    if type(peripheralObj.setMode) ~= "function" then
+        return false, "Entangloporter missing setMode()"
+    end
+
+    local sideConfig = REFUEL_SIDE_MAP[sideKey]
+    local ok, err = pcall(peripheralObj.setMode, "ITEM", sideConfig.entangloporterSide, "INPUT_OUTPUT")
+    if not ok then
+        return false, "setMode ITEM INPUT_OUTPUT failed: " .. tostring(err)
+    end
+
+    return true
+end
+
+local function bufferItemMatches(detail, options)
+    if type(detail) ~= "table" then
+        return false
+    end
+
+    local pattern = options.fuelItemPattern or "lava_bucket"
+    local name = detail.name or detail.id
+    return type(name) == "string" and name:find(pattern, 1, true) ~= nil
+end
+
+local function consumeFuelFromInventory(targetFuel, fuelPattern)
+    local fuelBefore = getFuelLevelNumber()
+
+    for slot = 1, 16 do
+        local detail = turtle.getItemDetail(slot)
+        if detail and detail.name and detail.name:find(fuelPattern, 1, true) then
+            turtle.select(slot)
+            while getFuelLevelNumber() < targetFuel and turtle.refuel(1) do
+            end
+        end
+
+        if getFuelLevelNumber() >= targetFuel then
+            break
+        end
+    end
+
+    return getFuelLevelNumber() > fuelBefore
+end
+
+local function runEntangloporterRefuelStrategy(options)
+    local cfg = mergeOptions({
+        side = "front",
+        entangloporterItem = "quantum_entangloporter",
+        fuelItemPattern = "lava_bucket",
+        pullCount = 16,
+        maxCycles = 10,
+        retryDelay = 0.5,
+        attachDelay = 0.2,
+        requireBufferItem = true,
+        returnLeftovers = true
+    }, options)
+
+    local ops = REFUEL_SIDE_MAP[cfg.side]
+    if not ops then
+        return false, "Invalid refuel side. Expected front/up/down"
+    end
+
+    local targetFuel = tonumber(cfg.targetFuel) or getFuelTarget(cfg)
+    local selectedBefore = turtle.getSelectedSlot()
+    local inventoryBefore = snapshotInventory()
+    local entangloporterSlot = nil
+    local placed = false
+    local peripheralObj = nil
+
+    local function cleanup()
+        if cfg.returnLeftovers then
+            for slot = 1, 16 do
+                local current = turtle.getItemDetail(slot)
+                if current and shouldReturnItem(current, cfg) then
+                    local previous = inventoryBefore[slot]
+                    local dropCount = current.count
+                    if previous and previous.name == current.name then
+                        dropCount = current.count - previous.count
+                    end
+
+                    if dropCount > 0 then
+                        turtle.select(slot)
+                        ops.drop(dropCount)
+                    end
+                end
+            end
+        end
+
+        if placed then
+            turtle.select(entangloporterSlot or selectedBefore)
+            ops.dig()
+        end
+
+        turtle.select(selectedBefore)
+        tlib.scanInventory()
+    end
+
+    local found, slotOrErr = tlib.selectItem(cfg.entangloporterItem)
+    if not found then
+        return false, "Entangloporter item not found: " .. tostring(slotOrErr)
+    end
+    entangloporterSlot = slotOrErr
+
+    ops.dig()
+
+    local placedOk, placeErr = ops.place()
+    if not placedOk then
+        turtle.select(selectedBefore)
+        return false, "Failed to place entangloporter: " .. tostring(placeErr)
+    end
+    placed = true
+
+    sleep(cfg.attachDelay)
+
+    for _ = 1, 5 do
+        peripheralObj = peripheral.wrap(ops.sideName)
+        if peripheralObj then break end
+        sleep(0.1)
+    end
+
+    if not peripheralObj then
+        cleanup()
+        return false, "Failed to wrap entangloporter peripheral on " .. ops.sideName
+    end
+
+    local configOk, configErr = configureEntangloporterForFuel(peripheralObj, cfg.side)
+    if not configOk then
+        cleanup()
+        return false, configErr
+    end
+
+    local cycles = 0
+    while getFuelLevelNumber() < targetFuel and cycles < cfg.maxCycles do
+        if cfg.requireBufferItem then
+            if type(peripheralObj.getBufferItem) ~= "function" then
+                cleanup()
+                return false, "Entangloporter missing getBufferItem()"
+            end
+
+            local ok, bufferItem = pcall(peripheralObj.getBufferItem)
+            if not ok then
+                cleanup()
+                return false, "getBufferItem() failed: " .. tostring(bufferItem)
+            end
+
+            if not bufferItemMatches(bufferItem, cfg) then
+                cycles = cycles + 1
+                sleep(cfg.retryDelay)
+            else
+                ops.suck(cfg.pullCount)
+                local consumed = consumeFuelFromInventory(targetFuel, cfg.fuelItemPattern)
+                if not consumed then
+                    cycles = cycles + 1
+                    sleep(cfg.retryDelay)
+                end
+            end
+        else
+            ops.suck(cfg.pullCount)
+            local consumed = consumeFuelFromInventory(targetFuel, cfg.fuelItemPattern)
+            if not consumed then
+                cycles = cycles + 1
+                sleep(cfg.retryDelay)
+            end
+        end
+    end
+
+    local success = getFuelLevelNumber() >= targetFuel
+    cleanup()
+
+    if success then
+        return true, "entangloporter_refuel_success"
+    end
+
+    return false, "Entangloporter refuel did not reach requested target"
+end
+
+registerRefuelStrategy("inventory_scan", runInventoryRefuelStrategy)
+registerRefuelStrategy("entangloporter", runEntangloporterRefuelStrategy)
+
+ensureStateDefaults()
 
 local function resolveProgramPath(programName)
     if type(programName) ~= "string" or programName == "" then
@@ -317,7 +651,74 @@ function tlib.load()
             if data then state = data end
         end
     end
+    ensureStateDefaults()
     return state
+end
+
+function tlib.useRefuelStrategy(name, options)
+    if type(name) ~= "string" or name == "" then
+        return false, "Strategy name is required"
+    end
+
+    if not refuelStrategies[name] then
+        return false, "Unknown refuel strategy: " .. tostring(name)
+    end
+
+    ensureStateDefaults()
+    state.refuelStrategy = name
+    if options then
+        state.refuelStrategies[name] = cloneTable(options)
+    elseif not state.refuelStrategies[name] then
+        state.refuelStrategies[name] = {}
+    end
+
+    tlib.save()
+    return true
+end
+
+function tlib.getRefuelStrategy()
+    ensureStateDefaults()
+    local name = state.refuelStrategy
+    local opts = state.refuelStrategies[name] or {}
+    return name, cloneTable(opts)
+end
+
+function tlib.refuel(options)
+    if turtle.getFuelLevel() == "unlimited" then
+        return true, "unlimited"
+    end
+
+    ensureStateDefaults()
+
+    local strategyName = state.refuelStrategy or "inventory_scan"
+    local strategy = refuelStrategies[strategyName]
+    local defaultOptions = state.refuelStrategies[strategyName] or {}
+    local merged = mergeOptions(defaultOptions, options)
+    merged.targetFuel = tonumber(merged.targetFuel) or getFuelTarget(merged)
+
+    if not strategy then
+        strategyName = "inventory_scan"
+        strategy = refuelStrategies[strategyName]
+    end
+
+    local ok, reason = strategy(merged)
+    if ok and getFuelLevelNumber() >= merged.targetFuel then
+        return true, reason
+    end
+
+    if strategyName ~= "inventory_scan" and merged.allowFallback ~= false then
+        local fallbackDefaults = state.refuelStrategies.inventory_scan or {}
+        local fallbackOptions = mergeOptions(fallbackDefaults, merged)
+        fallbackOptions.targetFuel = merged.targetFuel
+        local fallback = refuelStrategies.inventory_scan
+        local fOk, fReason = fallback(fallbackOptions)
+        if fOk and getFuelLevelNumber() >= merged.targetFuel then
+            return true, "fallback_inventory_scan: " .. tostring(fReason)
+        end
+        return false, tostring(reason or "strategy_failed") .. "; fallback: " .. tostring(fReason)
+    end
+
+    return false, reason or "Refuel failed"
 end
 
 function tlib.getPosition() return state.x, state.y, state.z, state.facing end
@@ -815,30 +1216,15 @@ function tlib.ensureFuel(needed)
     if turtle.getFuelLevel() == "unlimited" then return true end
     if turtle.getFuelLevel() >= needed then return true end
 
-    -- Try automated refuel
-    for slot = 1, 16 do
-        turtle.select(slot)
-        if turtle.refuel(0) then
-            turtle.refuel()
-            local detail = turtle.getItemDetail(slot)
-            if detail then
-                state.inventory[slot] = { name = detail.name, count = detail.count }
-            else
-                state.inventory[slot] = nil
-            end
-
-            if turtle.getFuelLevel() >= needed then
-                turtle.select(1)
-                tlib.save()
-                return true
-            end
-        end
+    local missing = needed - turtle.getFuelLevel()
+    local ok, err = tlib.refuel({ needed = missing })
+    if ok and turtle.getFuelLevel() >= needed then
+        return true
     end
 
-    turtle.select(1)
-
     -- SYSTEM CRITICAL ERROR: OUT OF FUEL (Broadcasting over Rednet with is_error=true)
-    local errMsg = string.format("ERROR: Out of fuel! Needed: %d, Current: %s", needed, tostring(turtle.getFuelLevel()))
+    local errMsg = string.format("ERROR: Out of fuel! Needed: %d, Current: %s, Refuel: %s", needed,
+        tostring(turtle.getFuelLevel()), tostring(err))
     printError("\n" .. errMsg)
     tlib.broadcastStatus(errMsg, true)
 

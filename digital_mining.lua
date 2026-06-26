@@ -156,6 +156,20 @@ local function run()
     if p.phase == "boot" then
         print("Digital Mining: Initializing...")
 
+        local strategyOk, strategyErr = tlib.useRefuelStrategy("entangloporter", {
+            side = "front",
+            entangloporterItem = "quantum_entangloporter",
+            fuelItemPattern = "lava_bucket",
+            pullCount = 16,
+            maxCycles = 8,
+            retryDelay = 0.5,
+            requireBufferItem = true,
+            allowFallback = true
+        })
+        if not strategyOk then
+            print("Refuel strategy selection failed: " .. tostring(strategyErr) .. ". Using default behavior.")
+        end
+
         tlib.initialize()
 
         local x, y, z, facing = tlib.getPosition()

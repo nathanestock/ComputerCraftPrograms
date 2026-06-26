@@ -289,3 +289,61 @@ Use test.lua as the canonical example of:
 - summary/finalization workflow
 
 Use tlib.lua as the source of truth for wrapper behavior and startup resume orchestration.
+
+## 12. Refuel Strategy Contract
+
+tlib now supports strategy-based refueling. Programs can choose how fuel is sourced without changing movement code.
+
+### 12.1 Public API
+
+- tlib.useRefuelStrategy(name, options)
+- tlib.getRefuelStrategy()
+- tlib.refuel(options)
+- tlib.ensureFuel(needed)
+
+Behavior rules:
+
+1. ensureFuel(needed) remains the primary movement gate and now delegates to tlib.refuel internally.
+2. The selected strategy is persisted in turtle_state.json and survives reboot.
+3. If strategy execution fails and allowFallback is not false, tlib falls back to inventory scanning.
+
+### 12.2 Built-In Strategies
+
+Available names:
+
+- inventory_scan: scans turtle inventory and consumes any refuelable items.
+- entangloporter: places a quantum entangloporter on a side, configures item I/O, pulls fuel items, refuels, returns leftovers, then digs the entangloporter back up.
+
+### 12.3 Entangloporter Strategy Options
+
+Common options (passed to tlib.useRefuelStrategy("entangloporter", options) or tlib.refuel(options)):
+
+- side: front, up, or down
+- entangloporterItem: item matcher used by tlib.selectItem (default quantum_entangloporter)
+- fuelItemPattern: fuel item matcher (example lava_bucket)
+- pullCount: max stack count pulled each cycle
+- maxCycles: retry loop count while waiting for fuel buffer
+- retryDelay: delay between retries
+- requireBufferItem: requires getBufferItem() match before pulling when true
+- allowFallback: when true, fallback to inventory_scan on failure
+
+### 12.4 Minimal Usage Example
+
+```lua
+local ok, err = tlib.useRefuelStrategy("entangloporter", {
+    side = "front",
+    entangloporterItem = "quantum_entangloporter",
+    fuelItemPattern = "lava_bucket",
+    requireBufferItem = true,
+    allowFallback = true
+})
+
+if not ok then
+    print("Failed to set refuel strategy: " .. tostring(err))
+end
+
+-- Existing movement code can continue using ensureFuel
+if not tlib.ensureFuel(40) then
+    error("Insufficient fuel for operation")
+end
+```

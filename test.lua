@@ -216,6 +216,23 @@ local function runSafeTests()
     assertTrue("FUEL-01", fuelCheck == true,
         "ensureFuel(0) succeeds", "ensureFuel(0) returned false")
 
+    local hasStrategyApi = hasFunction("useRefuelStrategy") and hasFunction("getRefuelStrategy") and hasFunction("refuel")
+    assertTrue("FUEL-02", hasStrategyApi,
+        "Refuel strategy APIs are available", "Refuel strategy APIs are missing")
+
+    if hasStrategyApi then
+        local setOk, setErr = tlib.useRefuelStrategy("inventory_scan", {})
+        assertTrue("FUEL-03", setOk == true,
+            "useRefuelStrategy accepted inventory_scan", "useRefuelStrategy failed: " .. tostring(setErr))
+
+        local strategyName, strategyOptions = tlib.getRefuelStrategy()
+        assertTrue("FUEL-04", strategyName == "inventory_scan",
+            "Selected refuel strategy persisted as inventory_scan",
+            "Selected refuel strategy did not persist correctly")
+        assertTrue("FUEL-05", type(strategyOptions) == "table",
+            "getRefuelStrategy returned options table", "getRefuelStrategy options type was invalid")
+    end
+
     local _, _, _, facingStart = tlib.getPosition()
     local trOk = tlib.turnRight()
     local _, _, _, facingRight = tlib.getPosition()
