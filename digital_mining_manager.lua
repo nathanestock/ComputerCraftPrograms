@@ -607,6 +607,19 @@ local function createUI()
         fields = {}
     }
 
+    local screenW, screenH = 51, 19
+    if monitor and type(monitor.getSize) == "function" then
+        screenW, screenH = monitor.getSize()
+    elseif term and type(term.getSize) == "function" then
+        screenW, screenH = term.getSize()
+    end
+
+    local bodyTop = 4
+    local bodyHeight = math.max(4, screenH - 3)
+    local leftWidth = math.max(20, math.floor(screenW / 2))
+    local rightX = leftWidth + 1
+    local rightWidth = math.max(20, screenW - leftWidth)
+
     ui.header = main:addLabel()
         :setPosition(1, 1)
         :setForeground(colors and colors.white or 1)
@@ -620,13 +633,13 @@ local function createUI()
         :setForeground(colors and colors.yellow or 1)
 
     ui.left = main:addFrame()
-        :setPosition(1, 4)
-        :setSize("50%", "100%-3")
+        :setPosition(1, bodyTop)
+        :setSize(leftWidth, bodyHeight)
         :setBackground(colors and colors.gray or 1)
 
     ui.right = main:addFrame()
-        :setPosition("50%+1", 4)
-        :setSize("50%", "100%-3")
+        :setPosition(rightX, bodyTop)
+        :setSize(rightWidth, bodyHeight)
         :setBackground(colors and colors.black or 1)
 
     ui.left:addLabel()
@@ -682,7 +695,7 @@ local function createUI()
 
     ui.workerList = ui.right:addList()
         :setPosition(2, 3)
-        :setSize("100%-2", "100%-3")
+        :setSize(math.max(10, rightWidth - 2), math.max(4, bodyHeight - 3))
 
     local function fieldValue(name)
         return ui.fields[name] and ui.fields[name]:getText() or ""
