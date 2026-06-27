@@ -22,6 +22,7 @@ local ENTANGLOPORTER_FREQ      = "digital_miners"
 local ENTANGLOPORTER_REFUEL_FREQ = "lava_buckets"
 local DISCOVERY_PROTOCOL       = "digital_mining_discovery"
 local WORKER_CONFIG_FILE       = "digital_mining_worker_config.json"
+local HEARTBEAT_INTERVAL       = 3
 
 -- =============================================================================
 -- State Setup
@@ -46,6 +47,8 @@ task.digitalMining = task.digitalMining or {
     currentFilters  = nil,
     managerLabel    = nil,
     managerProtocol = nil,
+    activeManagerId = nil,
+    lastHeartbeatAt = 0,
     updatedAt       = os.time()
 }
 
@@ -59,6 +62,9 @@ if tonumber(p.version or 1) < 2 then
     p.currentSettings = nil
     p.currentFilters = nil
 end
+
+p.activeManagerId = tonumber(p.activeManagerId)
+p.lastHeartbeatAt = tonumber(p.lastHeartbeatAt) or 0
 
 -- =============================================================================
 -- Phase Helpers
@@ -397,6 +403,40 @@ local function sendWorkerMessage(managerID, managerProtocol, messageType, body)
     return sendOk, sendErr
 end
 
+local function buildTelemetryBody(phaseOverride)
+    local x, y, z, facing = tlib.getPosition()
+    return {
+        phase = phaseOverride or p.phase,
+        position = {
+            x = x,
+            y = y,
+            z = z
+        },
+        facing = facing,
+        taskId = p.activeTask and p.activeTask.id or nil
+    }
+end
+
+local function sendHeartbeat(managerID, managerProtocol, phaseOverride, force)
+    local manager = tonumber(managerID) or tonumber(p.activeManagerId)
+    local protocol = managerProtocol or p.managerProtocol
+    if not manager or manager < 0 or type(protocol) ~= "string" or protocol == "" then
+        return false, "missing manager target"
+    end
+
+    if not force and (nowSeconds() - (tonumber(p.lastHeartbeatAt) or 0)) < HEARTBEAT_INTERVAL then
+        return false, "heartbeat throttled"
+    end
+
+    local okSend, sendErr = sendWorkerMessage(manager, protocol, "heartbeat", buildTelemetryBody(phaseOverride))
+    if okSend then
+        p.lastHeartbeatAt = nowSeconds()
+        saveTask()
+        return true
+    end
+    return false, sendErr
+end
+
 local function resolveManagerSelection()
     local config = readWorkerConfig()
     local managerLabel = config.managerLabel
@@ -545,6 +585,7 @@ local function requestTaskFromManager()
         presetName = taskPayload.presetName,
         assignedAt = nowSeconds()
     }
+    p.activeManagerId = managerID
     p.currentSettings = settings
     p.currentFilters = filters
     p.phase = "travel_to_task"
@@ -557,6 +598,8 @@ local function requestTaskFromManager()
         chunkOriginX = location.chunkOriginX,
         chunkOriginZ = location.chunkOriginZ
     })
+
+    sendHeartbeat(managerID, managerProtocol, "travel_to_task", true)
 
     return managerID, managerProtocol
 end
@@ -637,8 +680,15 @@ local function run()
         local managerID, managerProtocol = requestTaskFromManager()
         sendWorkerMessage(managerID, managerProtocol, "task_start", {
             taskId = p.activeTask and p.activeTask.id,
-            phase = "travel_to_task"
+            phase = "travel_to_task",
+            position = {
+                x = select(1, tlib.getPosition()),
+                y = select(2, tlib.getPosition()),
+                z = select(3, tlib.getPosition())
+            },
+            facing = select(4, tlib.getPosition())
         })
+        sendHeartbeat(managerID, managerProtocol, "travel_to_task", true)
     end
 
     -- -------------------------------------------------------------------------
@@ -839,6 +889,7 @@ local function run()
 
             p.monitorChecks = p.monitorChecks + 1
             saveTask()
+            sendHeartbeat(p.activeManagerId, p.managerProtocol, "monitor", false)
 
             if toMine == 0 then
                 print("Nothing left to mine. Stopping digital miner...")
@@ -992,20 +1043,27 @@ local function run()
     if p.phase == "finalize" then
         p.completed = true
         local managerLabel, managerProtocol = resolveManagerSelection()
-        local lookupTxOk, lookupOk, managerID = tlib.runRednetTransaction(function()
-            return nlib.lookup(managerProtocol, managerLabel)
-        end)
-        if not lookupTxOk then
-            error("finalize: manager lookup transaction failed: " .. tostring(lookupOk))
-        end
-        if not lookupOk then
-            error("finalize: manager lookup failed")
+        local managerID = tonumber(p.activeManagerId)
+        if not managerID then
+            local lookupTxOk, lookupOk, lookedUpID = tlib.runRednetTransaction(function()
+                return nlib.lookup(managerProtocol, managerLabel)
+            end)
+            if not lookupTxOk then
+                error("finalize: manager lookup transaction failed: " .. tostring(lookupOk))
+            end
+            if not lookupOk then
+                error("finalize: manager lookup failed")
+            end
+            managerID = tonumber(lookedUpID)
         end
         if managerID then
+            sendHeartbeat(managerID, managerProtocol, "finalize", true)
             reportTaskComplete(managerID, managerProtocol)
         end
 
         p.activeTask = nil
+        p.activeManagerId = nil
+        p.lastHeartbeatAt = 0
         p.currentSettings = nil
         p.currentFilters = nil
         resetTaskRuntimeState()
